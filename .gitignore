@@ -48,6 +48,8 @@ dmypy.json
 output/
 extracted/
 textures/
+sample-data/
+game-data/
 *.tex
 *.dds
 *.stl
