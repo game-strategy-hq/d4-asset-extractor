@@ -1,0 +1,64 @@
+[project]
+name = "d4-asset-extractor"
+version = "0.1.0"
+description = "Extract and convert Diablo IV game assets (textures, strings, data) from CASC storage"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [
+    { name = "Game Strategy HQ" }
+]
+keywords = ["diablo", "diablo4", "diablo-iv", "asset-extractor", "casc", "blizzard", "game-data"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Games/Entertainment",
+    "Topic :: Multimedia :: Graphics :: Graphics Conversion",
+]
+
+dependencies = [
+    "pillow>=10.0.0",
+    "imagehash>=4.3.0",
+    "rich>=13.0.0",
+    "typer>=0.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+d4-extract = "d4_asset_extractor.cli:main"
+d4-search = "d4_asset_extractor.search:main"
+
+[project.urls]
+Homepage = "https://github.com/game-strategy-hq/d4-asset-extractor"
+Repository = "https://github.com/game-strategy-hq/d4-asset-extractor"
+Issues = "https://github.com/game-strategy-hq/d4-asset-extractor/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/d4_asset_extractor"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
