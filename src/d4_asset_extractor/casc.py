@@ -300,23 +300,24 @@ class CASCExtractor:
             for tex_path in ["Base\\meta\\Texture", "Base\\payload\\Texture"]:
                 # Pattern: Base\meta\Texture\{filter}.tex (filter can include wildcards)
                 pattern = f"{tex_path}\\{name_filter}.tex"
-                cmd = [
-                    str(self.casc_console_path),
-                    "-m", "Pattern",
-                    "-e", pattern,
-                    "-d", str(output_dir),
-                    "-l", "All",
-                    "-p", "fenris",
-                    "-s", str(self.game_dir),
-                ]
+                # Use shell=True with quoted paths (matches reference implementation)
+                cmd = (
+                    f'"{self.casc_console_path}" '
+                    f'-m Pattern '
+                    f'-e "{pattern}" '
+                    f'-d "{output_dir}" '
+                    f'-l All '
+                    f'-p fenris '
+                    f'-s "{self.game_dir}"'
+                )
                 if verbose:
-                    print(f"[CASCConsole] Running: {' '.join(cmd)}")
+                    print(f"[CASCConsole] Running: {cmd}")
                 try:
-                    result = subprocess.run(cmd, capture_output=True, text=True)
-                    if verbose and result.stdout:
-                        print(f"[CASCConsole] {result.stdout[:500]}")
-                    if verbose and result.stderr:
-                        print(f"[CASCConsole stderr] {result.stderr[:500]}")
+                    result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+                    if verbose:
+                        print(f"[CASCConsole] {result.stdout}")
+                    if result.stderr:
+                        print(f"[CASCConsole stderr] {result.stderr}")
                 except subprocess.CalledProcessError as e:
                     if verbose:
                         print(f"[CASCConsole] Failed: {e}")
