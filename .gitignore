@@ -50,6 +50,7 @@ extracted/
 textures/
 sample-data/
 game-data/
+D4-install/
 *.tex
 *.dds
 *.stl
