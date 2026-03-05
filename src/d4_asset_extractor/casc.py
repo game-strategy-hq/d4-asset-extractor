@@ -291,24 +291,40 @@ class CASCExtractor:
         name_filter: str,
     ) -> list[Path]:
         """Extract files using CASCConsole.exe."""
-        # Combine extension and name filter
-        full_filter = name_filter.replace("*", "") + extension if name_filter != "*" else extension
-
-        # Syntax: CASCConsole -m Pattern -e <pattern> -d <dest> -l <locale> -p <product> -s <storage>
-        cmd = [
-            str(self.casc_console_path),
-            "-m", "Pattern",
-            "-e", full_filter,
-            "-d", str(output_dir),
-            "-l", "enUS",
-            "-p", "fenris",  # D4 product code
-            "-s", str(self.game_dir),
-        ]
-
-        try:
-            subprocess.run(cmd, capture_output=True, check=True)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"CASCConsole extraction failed: {e}")
+        # D4 stores textures at Base\meta\Texture and Base\payload\Texture
+        if extension == "*.tex":
+            # Extract both meta (format info) and payload (pixel data)
+            for tex_path in ["Base\\meta\\Texture", "Base\\payload\\Texture"]:
+                pattern = f"{tex_path}\\{name_filter}.tex" if name_filter != "*" else f"{tex_path}\\*.tex"
+                cmd = [
+                    str(self.casc_console_path),
+                    "-m", "Pattern",
+                    "-e", pattern,
+                    "-d", str(output_dir),
+                    "-l", "All",
+                    "-p", "fenris",
+                    "-s", str(self.game_dir),
+                ]
+                try:
+                    subprocess.run(cmd, capture_output=True, check=True)
+                except subprocess.CalledProcessError:
+                    pass  # Continue even if one path fails
+        else:
+            # For other file types, use simple pattern
+            full_filter = name_filter.replace("*", "") + extension if name_filter != "*" else extension
+            cmd = [
+                str(self.casc_console_path),
+                "-m", "Pattern",
+                "-e", full_filter,
+                "-d", str(output_dir),
+                "-l", "All",
+                "-p", "fenris",
+                "-s", str(self.game_dir),
+            ]
+            try:
+                subprocess.run(cmd, capture_output=True, check=True)
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"CASCConsole extraction failed: {e}")
 
         # Return list of extracted files
         return list(output_dir.rglob(extension))
