@@ -21,6 +21,22 @@ from typing import Optional
 from PIL import Image
 
 
+def _find_tool(name: str) -> Path:
+    """Find a tool in standard locations."""
+    # Check local tools/ directory first
+    local = Path("tools") / name
+    if local.exists():
+        return local
+
+    # Check user's .d4-tools directory
+    user_tools = Path.home() / ".d4-tools" / name
+    if user_tools.exists():
+        return user_tools
+
+    # Return user tools path as default
+    return user_tools
+
+
 @dataclass
 class TextureInfo:
     """Metadata about a D4 texture file."""
@@ -74,22 +90,6 @@ class TextureConverter:
         self.crop = crop
         self.slice_atlases = slice_atlases
         self.texconv_path = texconv_path or _find_tool("texconv.exe")
-
-
-def _find_tool(name: str) -> Path:
-    """Find a tool in standard locations."""
-    # Check local tools/ directory first
-    local = Path("tools") / name
-    if local.exists():
-        return local
-
-    # Check user's .d4-tools directory
-    user_tools = Path.home() / ".d4-tools" / name
-    if user_tools.exists():
-        return user_tools
-
-    # Return local path as default (will error later if not found)
-    return local
 
     def convert(self, tex_file: Path, output_dir: Path) -> list[Path]:
         """
