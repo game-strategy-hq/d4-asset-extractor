@@ -131,6 +131,8 @@ def textures(
                 console.print(f"[yellow]No texture files found matching '{filter_pattern}'[/yellow]")
                 raise typer.Exit(0)
 
+            # Only process payload files (meta files are used for format info)
+            tex_files = [f for f in tex_files if "payload" in str(f).lower()]
             console.print(f"Found {len(tex_files)} texture files")
 
             # Convert textures

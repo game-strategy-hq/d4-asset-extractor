@@ -96,7 +96,7 @@ class TextureConverter:
         Convert a .tex file to the target image format.
 
         Args:
-            tex_file: Path to the .tex file
+            tex_file: Path to the .tex file (can be meta or payload)
             output_dir: Directory to save converted images
 
         Returns:
@@ -114,45 +114,66 @@ class TextureConverter:
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Read texture info
-        info = self._read_texture_info(tex_file)
+        # D4 textures: find meta and payload pair
+        meta_file, payload_file = self._find_meta_payload_pair(tex_file)
 
-        # Convert to intermediate format (DDS or direct)
-        dds_file = self._tex_to_dds(tex_file)
-
-        try:
-            # Convert DDS to image
+        if meta_file and payload_file and meta_file.exists() and payload_file.exists():
+            # Use proper D4 texture conversion
+            image = self._convert_d4_texture(meta_file, payload_file)
+        else:
+            # Fallback: try direct conversion
+            info = self._read_texture_info(tex_file)
+            dds_file = self._tex_to_dds(tex_file)
             image = self._dds_to_image(dds_file)
-
-            if image is None:
-                raise RuntimeError(f"Failed to decode texture: {tex_file}")
-
-            # Post-processing
-            if self.crop:
-                image = self._crop_transparent(image)
-
-            # Save output
-            output_files = []
-
-            if self.slice_atlases and info.is_atlas and info.slice_count > 1:
-                # Slice into individual images
-                slices = self._slice_atlas(image, info)
-                for i, slice_img in enumerate(slices):
-                    output_path = output_dir / f"{tex_file.stem}_{i:03d}.{self.output_format}"
-                    self._save_image(slice_img, output_path)
-                    output_files.append(output_path)
-            else:
-                # Save single image
-                output_path = output_dir / f"{tex_file.stem}.{self.output_format}"
-                self._save_image(image, output_path)
-                output_files.append(output_path)
-
-            return output_files
-
-        finally:
-            # Clean up intermediate DDS file
             if dds_file != tex_file and dds_file.exists():
                 dds_file.unlink()
+
+        if image is None:
+            raise RuntimeError(f"Failed to decode texture: {tex_file}")
+
+        # Post-processing
+        if self.crop:
+            image = self._crop_transparent(image)
+
+        # Save output
+        output_files = []
+        output_path = output_dir / f"{tex_file.stem}.{self.output_format}"
+        self._save_image(image, output_path)
+        output_files.append(output_path)
+
+        return output_files
+
+    def _find_meta_payload_pair(self, tex_file: Path) -> tuple[Optional[Path], Optional[Path]]:
+        """Find the meta and payload files for a D4 texture."""
+        path_str = str(tex_file)
+
+        # Check if this is a meta or payload file
+        if "\\meta\\Texture\\" in path_str or "/meta/Texture/" in path_str:
+            meta_file = tex_file
+            payload_file = Path(path_str.replace("\\meta\\Texture\\", "\\payload\\Texture\\")
+                                        .replace("/meta/Texture/", "/payload/Texture/"))
+        elif "\\payload\\Texture\\" in path_str or "/payload/Texture/" in path_str:
+            payload_file = tex_file
+            meta_file = Path(path_str.replace("\\payload\\Texture\\", "\\meta\\Texture\\")
+                                     .replace("/payload/Texture/", "/meta/Texture/"))
+        else:
+            return None, None
+
+        return meta_file, payload_file
+
+    def _convert_d4_texture(self, meta_file: Path, payload_file: Path) -> Optional[Image.Image]:
+        """Convert D4 texture using meta + payload files."""
+        from .tex_converter import read_texture_definition, convert_raw_to_dds, dds_to_image
+
+        try:
+            meta_data = meta_file.read_bytes()
+            payload_data = payload_file.read_bytes()
+
+            definition = read_texture_definition(meta_data)
+            dds_data = convert_raw_to_dds(payload_data, definition)
+            return dds_to_image(dds_data)
+        except Exception:
+            return None
 
     def _read_texture_info(self, tex_file: Path) -> TextureInfo:
         """
