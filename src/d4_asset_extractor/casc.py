@@ -105,7 +105,21 @@ class CASCExtractor:
     ) -> None:
         self.game_dir = Path(game_dir)
         self.casc_console_path = casc_console_path or _find_tool("CASCConsole.exe")
-        self._data_dir = self.game_dir / "Data"
+        self._data_dir = self._find_data_dir()
+
+    def _find_data_dir(self) -> Path:
+        """Find the CASC data directory (handles nested 'data' folder)."""
+        # Try: game_dir/Data/data/ (D4 structure)
+        nested = self.game_dir / "Data" / "data"
+        if nested.exists() and list(nested.glob("data.*")):
+            return nested
+
+        # Try: game_dir/Data/ (standard structure)
+        standard = self.game_dir / "Data"
+        if standard.exists():
+            return standard
+
+        return standard
 
     def is_valid(self) -> bool:
         """Check if this appears to be a valid Diablo IV CASC installation."""
