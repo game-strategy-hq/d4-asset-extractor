@@ -249,12 +249,15 @@ class CASCExtractor:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Build CASCConsole command
+        # Syntax: CASCConsole -m Pattern -e <pattern> -d <dest> -l <locale> -p <product> -s <storage>
         cmd = [
             str(self.casc_console_path),
-            str(self.game_dir),
-            "-o", str(output_dir),
-            "-f", filter_pattern,
-            "-e",  # Extract mode
+            "-m", "Pattern",
+            "-e", filter_pattern,
+            "-d", str(output_dir),
+            "-l", "enUS",
+            "-p", "fenris",  # D4 product code
+            "-s", str(self.game_dir),
         ]
 
         try:
@@ -265,7 +268,6 @@ class CASCExtractor:
                 check=True,
             )
             # Parse output to count extracted files
-            # CASCConsole typically outputs "Extracted X files"
             extracted = 0
             for line in result.stdout.split("\n"):
                 if "extracted" in line.lower():
@@ -292,12 +294,15 @@ class CASCExtractor:
         # Combine extension and name filter
         full_filter = name_filter.replace("*", "") + extension if name_filter != "*" else extension
 
+        # Syntax: CASCConsole -m Pattern -e <pattern> -d <dest> -l <locale> -p <product> -s <storage>
         cmd = [
             str(self.casc_console_path),
-            str(self.game_dir),
-            "-o", str(output_dir),
-            "-f", full_filter,
-            "-e",
+            "-m", "Pattern",
+            "-e", full_filter,
+            "-d", str(output_dir),
+            "-l", "enUS",
+            "-p", "fenris",  # D4 product code
+            "-s", str(self.game_dir),
         ]
 
         try:
