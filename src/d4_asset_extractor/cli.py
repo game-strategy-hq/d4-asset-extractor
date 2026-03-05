@@ -131,8 +131,10 @@ def textures(
         meta_dir = extracted_base / "meta" / "Texture"
         payload_dir = extracted_base / "payload" / "Texture"
 
-        # Skip extraction if files exist (unless --force-extract)
-        need_extract = force_extract or not payload_dir.exists() or not list(payload_dir.glob("*.tex"))
+        # Skip extraction if BOTH meta and payload exist with .tex files (unless --force-extract)
+        has_meta = meta_dir.exists() and list(meta_dir.glob("*.tex"))
+        has_payload = payload_dir.exists() and list(payload_dir.glob("*.tex"))
+        need_extract = force_extract or not (has_meta and has_payload)
 
         if need_extract:
             with Progress(
