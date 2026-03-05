@@ -381,8 +381,8 @@ def setup() -> None:
     console.print(f"  Tools directory: {tools_dir}")
     console.print()
 
-    # CASCExplorer
-    casc_url = "https://github.com/WoW-Tools/CASCExplorer/releases/download/CASCExplorer-v1.0.240/CASCExplorer.zip"
+    # CASCConsole (older release that includes the console tool)
+    casc_url = "https://github.com/WoW-Tools/CASCExplorer/releases/download/v0.7-alpha/CASCExplorer.zip"
     casc_exe = tools_dir / "CASCConsole.exe"
 
     if casc_exe.exists():
