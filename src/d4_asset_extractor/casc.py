@@ -89,8 +89,24 @@ class CASCExtractor:
         casc_console_path: Optional[Path] = None,
     ) -> None:
         self.game_dir = Path(game_dir)
-        self.casc_console_path = casc_console_path or Path("tools/CASCConsole.exe")
+        self.casc_console_path = casc_console_path or _find_tool("CASCConsole.exe")
         self._data_dir = self.game_dir / "Data"
+
+
+def _find_tool(name: str) -> Path:
+    """Find a tool in standard locations."""
+    # Check local tools/ directory first
+    local = Path("tools") / name
+    if local.exists():
+        return local
+
+    # Check user's .d4-tools directory
+    user_tools = Path.home() / ".d4-tools" / name
+    if user_tools.exists():
+        return user_tools
+
+    # Return local path as default (will error later if not found)
+    return local
 
     def is_valid(self) -> bool:
         """Check if this appears to be a valid Diablo IV CASC installation."""

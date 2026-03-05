@@ -281,15 +281,29 @@ def casc(
     console.print(f"  Filter: {filter_pattern}")
     console.print()
 
-    casc_console = Path("tools/CASCConsole.exe")
+    casc_console = _find_tool("CASCConsole.exe")
     if not casc_console.exists():
-        console.print("[red]Error:[/red] CASCConsole.exe not found in tools/ directory.")
+        console.print("[red]Error:[/red] CASCConsole.exe not found.")
         console.print()
-        console.print("Please download CASCExplorer from:")
-        console.print("  https://github.com/WoW-Tools/CASCExplorer/releases")
-        console.print()
-        console.print("Extract CASCConsole.exe to the tools/ directory.")
+        console.print("Run setup first:")
+        console.print("  d4-extract setup")
         raise typer.Exit(1)
+
+
+def _find_tool(name: str) -> Path:
+    """Find a tool in standard locations."""
+    # Check local tools/ directory first
+    local = Path("tools") / name
+    if local.exists():
+        return local
+
+    # Check user's .d4-tools directory
+    user_tools = Path.home() / ".d4-tools" / name
+    if user_tools.exists():
+        return user_tools
+
+    # Return user tools path as default
+    return user_tools
 
     try:
         extractor = CASCExtractor(game_dir, casc_console_path=casc_console)
@@ -347,6 +361,80 @@ def info(
         console.print(f"  Build: {info.get('build', 'Unknown')}")
         console.print(f"  Data files: {info.get('data_files', 0)}")
         console.print(f"  Total size: {info.get('total_size_gb', 0):.2f} GB")
+
+
+@app.command()
+def setup() -> None:
+    """
+    Download required tools (CASCConsole.exe, texconv.exe).
+
+    Downloads tools to ~/.d4-tools/ for use by the extractor.
+    """
+    import urllib.request
+    import zipfile
+    import io
+
+    tools_dir = Path.home() / ".d4-tools"
+    tools_dir.mkdir(parents=True, exist_ok=True)
+
+    console.print("[bold blue]D4 Asset Extractor Setup[/bold blue]")
+    console.print(f"  Tools directory: {tools_dir}")
+    console.print()
+
+    # CASCExplorer
+    casc_url = "https://github.com/WoW-Tools/CASCExplorer/releases/download/CASCExplorer-v1.0.240/CASCExplorer.zip"
+    casc_exe = tools_dir / "CASCConsole.exe"
+
+    if casc_exe.exists():
+        console.print("[green]✓[/green] CASCConsole.exe already installed")
+    else:
+        console.print("Downloading CASCExplorer...", end=" ")
+        try:
+            with urllib.request.urlopen(casc_url, timeout=60) as response:
+                zip_data = response.read()
+            with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                zf.extractall(tools_dir)
+            console.print("[green]✓[/green]")
+        except Exception as e:
+            console.print(f"[red]✗[/red] {e}")
+
+    # texconv
+    texconv_url = "https://github.com/microsoft/DirectXTex/releases/download/oct2025/texconv.exe"
+    texconv_exe = tools_dir / "texconv.exe"
+
+    if texconv_exe.exists():
+        console.print("[green]✓[/green] texconv.exe already installed")
+    else:
+        console.print("Downloading texconv.exe...", end=" ")
+        try:
+            with urllib.request.urlopen(texconv_url, timeout=60) as response:
+                texconv_exe.write_bytes(response.read())
+            console.print("[green]✓[/green]")
+        except Exception as e:
+            console.print(f"[red]✗[/red] {e}")
+
+    console.print()
+
+    # Verify
+    all_good = True
+    if not casc_exe.exists():
+        console.print("[red]✗[/red] CASCConsole.exe not found")
+        all_good = False
+    if not texconv_exe.exists():
+        console.print("[red]✗[/red] texconv.exe not found")
+        all_good = False
+
+    if all_good:
+        console.print("[green]Setup complete![/green]")
+        console.print()
+        console.print("Next steps:")
+        console.print('  d4-extract textures "C:\\Program Files\\Diablo IV" .\\icons --filter "2DUI*"')
+    else:
+        console.print()
+        console.print("[yellow]Some tools failed to download. Try manually:[/yellow]")
+        console.print(f"  CASCExplorer: https://github.com/WoW-Tools/CASCExplorer/releases")
+        console.print(f"  texconv: https://github.com/microsoft/DirectXTex/releases")
+        raise typer.Exit(1)
 
 
 def main() -> None:

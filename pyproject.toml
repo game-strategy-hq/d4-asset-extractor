@@ -39,7 +39,6 @@ dev = [
 [project.scripts]
 d4-extract = "d4_asset_extractor.cli:main"
 d4-search = "d4_asset_extractor.search:main"
-d4-download = "d4_asset_extractor.download:main"
 
 [project.urls]
 Homepage = "https://github.com/game-strategy-hq/d4-asset-extractor"
