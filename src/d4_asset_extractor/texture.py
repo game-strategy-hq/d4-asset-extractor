@@ -171,9 +171,16 @@ class TextureConverter:
 
             definition = read_texture_definition(meta_data)
             dds_data = convert_raw_to_dds(payload_data, definition)
-            return dds_to_image(dds_data)
-        except Exception:
-            return None
+            image = dds_to_image(dds_data, texconv_path=self.texconv_path)
+
+            # Crop to actual texture dimensions (aligned width may be larger)
+            if image.width > definition.width or image.height > definition.height:
+                image = image.crop((0, 0, definition.width, definition.height))
+
+            return image
+        except Exception as e:
+            # Re-raise with context for debugging
+            raise RuntimeError(f"Failed to convert {meta_file.name}: {e}") from e
 
     def _read_texture_info(self, tex_file: Path) -> TextureInfo:
         """

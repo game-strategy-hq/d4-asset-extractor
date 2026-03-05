@@ -9,12 +9,30 @@ References:
 """
 
 import struct
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
 from PIL import Image
+
+
+def _find_tool(name: str) -> Path:
+    """Find a tool in standard locations."""
+    # Check local tools/ directory first
+    local = Path("tools") / name
+    if local.exists():
+        return local
+
+    # Check user's .d4-tools directory
+    user_tools = Path.home() / ".d4-tools" / name
+    if user_tools.exists():
+        return user_tools
+
+    # Return user tools path as default
+    return user_tools
 
 # Texture format lookup table
 # Maps D4 format ID to DXGI format index and alignment
@@ -281,13 +299,53 @@ def convert_raw_to_dds(
     return header + raw_data
 
 
-def dds_to_image(dds_data: bytes) -> Image.Image:
+def dds_to_image(dds_data: bytes, texconv_path: Optional[Path] = None) -> Image.Image:
     """
     Convert DDS data to a PIL Image.
 
-    Uses Pillow's built-in DDS support.
+    Uses texconv.exe for BC7/BC6H formats that PIL doesn't support,
+    falls back to Pillow's built-in DDS support for simpler formats.
     """
-    return Image.open(BytesIO(dds_data))
+    # First try PIL (works for BC1, BC2, BC3, uncompressed)
+    try:
+        img = Image.open(BytesIO(dds_data))
+        img.load()  # Force load to detect errors
+        return img.convert("RGBA")
+    except Exception:
+        pass
+
+    # Fall back to texconv for BC7/BC6H formats
+    texconv = texconv_path or _find_tool("texconv.exe")
+    if not texconv.exists():
+        raise RuntimeError(
+            "texconv.exe not found. Run 'd4-extract setup' to download required tools."
+        )
+
+    # Write DDS to temp file, convert with texconv, read result
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        dds_file = temp_path / "texture.dds"
+        dds_file.write_bytes(dds_data)
+
+        # texconv.exe <file> -ft png -f R8G8B8A8_UNORM -y -o <output_dir>
+        cmd = [
+            str(texconv),
+            str(dds_file),
+            "-ft", "png",
+            "-f", "R8G8B8A8_UNORM",
+            "-y",
+            "-o", str(temp_path),
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"texconv failed: {result.stderr}")
+
+        png_file = temp_path / "texture.png"
+        if not png_file.exists():
+            raise RuntimeError("texconv did not produce output file")
+
+        return Image.open(png_file).copy()  # copy to keep after temp dir cleanup
 
 
 def convert_tex_to_png(
@@ -295,6 +353,7 @@ def convert_tex_to_png(
     payload_path: Path,
     output_path: Path,
     crop: bool = True,
+    texconv_path: Optional[Path] = None,
 ) -> bool:
     """
     Convert a D4 texture to PNG.
@@ -304,6 +363,7 @@ def convert_tex_to_png(
         payload_path: Path to payload .tex file (contains pixel data)
         output_path: Output PNG path
         crop: Whether to crop transparent borders
+        texconv_path: Optional path to texconv.exe
 
     Returns:
         True if successful
@@ -319,10 +379,14 @@ def convert_tex_to_png(
         # Convert to DDS
         dds_data = convert_raw_to_dds(payload_data, definition)
 
-        # Convert to image
-        image = dds_to_image(dds_data)
+        # Convert to image using texconv for BC7/BC6H support
+        image = dds_to_image(dds_data, texconv_path=texconv_path)
 
-        # Crop if requested
+        # Crop to actual texture dimensions (aligned width may be larger)
+        if image.width > definition.width or image.height > definition.height:
+            image = image.crop((0, 0, definition.width, definition.height))
+
+        # Crop transparent borders if requested
         if crop:
             bbox = image.getbbox()
             if bbox:
