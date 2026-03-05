@@ -87,6 +87,12 @@ def textures(
         "-c",
         help="Number of parallel conversion tasks.",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-V",
+        help="Show debug output from CASCConsole.",
+    ),
 ) -> None:
     """
     Extract and convert .tex texture files to standard image formats.
@@ -124,7 +130,7 @@ def textures(
             console=console,
         ) as progress:
             task = progress.add_task("Extracting CASC files...", total=None)
-            tex_files = casc.extract_textures(filter_pattern=filter_pattern)
+            tex_files = casc.extract_textures(filter_pattern=filter_pattern, verbose=verbose)
             progress.update(task, completed=True, total=1)
 
             if not tex_files:

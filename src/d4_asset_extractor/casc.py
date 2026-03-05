@@ -179,6 +179,7 @@ class CASCExtractor:
         self,
         output_dir: Optional[Path] = None,
         filter_pattern: str = "*",
+        verbose: bool = False,
     ) -> list[Path]:
         """
         Extract .tex texture files from CASC storage.
@@ -186,6 +187,7 @@ class CASCExtractor:
         Args:
             output_dir: Directory to extract files to. Uses temp dir if not specified.
             filter_pattern: Glob pattern to filter texture names (e.g., "2DUI*").
+            verbose: Print debug information.
 
         Returns:
             List of paths to extracted .tex files.
@@ -196,7 +198,7 @@ class CASCExtractor:
 
         # If we have CASCConsole, use it for extraction
         if self.casc_console_path.exists():
-            return self._extract_with_casc_console(output_dir, "*.tex", filter_pattern)
+            return self._extract_with_casc_console(output_dir, "*.tex", filter_pattern, verbose=verbose)
 
         # Otherwise, look for pre-extracted files
         return self._find_extracted_files(output_dir, "*.tex", filter_pattern)
@@ -289,13 +291,15 @@ class CASCExtractor:
         output_dir: Path,
         extension: str,
         name_filter: str,
+        verbose: bool = False,
     ) -> list[Path]:
         """Extract files using CASCConsole.exe."""
         # D4 stores textures at Base\meta\Texture and Base\payload\Texture
         if extension == "*.tex":
             # Extract both meta (format info) and payload (pixel data)
             for tex_path in ["Base\\meta\\Texture", "Base\\payload\\Texture"]:
-                pattern = f"{tex_path}\\{name_filter}.tex" if name_filter != "*" else f"{tex_path}\\*.tex"
+                # Pattern: Base\meta\Texture\{filter}.tex (filter can include wildcards)
+                pattern = f"{tex_path}\\{name_filter}.tex"
                 cmd = [
                     str(self.casc_console_path),
                     "-m", "Pattern",
@@ -305,9 +309,17 @@ class CASCExtractor:
                     "-p", "fenris",
                     "-s", str(self.game_dir),
                 ]
+                if verbose:
+                    print(f"[CASCConsole] Running: {' '.join(cmd)}")
                 try:
-                    subprocess.run(cmd, capture_output=True, check=True)
-                except subprocess.CalledProcessError:
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    if verbose and result.stdout:
+                        print(f"[CASCConsole] {result.stdout[:500]}")
+                    if verbose and result.stderr:
+                        print(f"[CASCConsole stderr] {result.stderr[:500]}")
+                except subprocess.CalledProcessError as e:
+                    if verbose:
+                        print(f"[CASCConsole] Failed: {e}")
                     pass  # Continue even if one path fails
         else:
             # For other file types, use simple pattern
