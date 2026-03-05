@@ -93,6 +93,11 @@ def textures(
         "-V",
         help="Show debug output from CASCConsole.",
     ),
+    force_extract: bool = typer.Option(
+        False,
+        "--force-extract",
+        help="Force re-extraction even if files exist.",
+    ),
 ) -> None:
     """
     Extract and convert .tex texture files to standard image formats.
@@ -121,7 +126,39 @@ def textures(
             )
             raise typer.Exit(1)
 
-        # Extract .tex files
+        # Check for existing extracted files
+        extracted_base = Path("extracted/textures/Base")
+        meta_dir = extracted_base / "meta" / "Texture"
+        payload_dir = extracted_base / "payload" / "Texture"
+
+        # Skip extraction if files exist (unless --force-extract)
+        need_extract = force_extract or not payload_dir.exists() or not list(payload_dir.glob("*.tex"))
+
+        if need_extract:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                task = progress.add_task("Extracting CASC files...", total=None)
+                tex_files = casc.extract_textures(filter_pattern=filter_pattern, verbose=verbose)
+                progress.update(task, completed=True, total=1)
+
+                if not tex_files:
+                    console.print(f"[yellow]No texture files found matching '{filter_pattern}'[/yellow]")
+                    raise typer.Exit(0)
+        else:
+            console.print("[dim]Using cached extracted files (use --force-extract to re-extract)[/dim]")
+
+        if not meta_dir.exists() or not payload_dir.exists():
+            console.print("[red]Error:[/red] Expected meta and payload directories not found.")
+            console.print(f"  Looking for: {meta_dir}")
+            console.print(f"  And: {payload_dir}")
+            raise typer.Exit(1)
+
+        # Get payload files (the actual texture data)
+        payload_files = list(payload_dir.glob("*.tex"))
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -129,27 +166,6 @@ def textures(
             TaskProgressColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task("Extracting CASC files...", total=None)
-            tex_files = casc.extract_textures(filter_pattern=filter_pattern, verbose=verbose)
-            progress.update(task, completed=True, total=1)
-
-            if not tex_files:
-                console.print(f"[yellow]No texture files found matching '{filter_pattern}'[/yellow]")
-                raise typer.Exit(0)
-
-            # Find meta and payload directories
-            extracted_base = Path("extracted/textures/Base")
-            meta_dir = extracted_base / "meta" / "Texture"
-            payload_dir = extracted_base / "payload" / "Texture"
-
-            if not meta_dir.exists() or not payload_dir.exists():
-                console.print("[red]Error:[/red] Expected meta and payload directories not found.")
-                console.print(f"  Looking for: {meta_dir}")
-                console.print(f"  And: {payload_dir}")
-                raise typer.Exit(1)
-
-            # Get payload files (the actual texture data)
-            payload_files = list(payload_dir.glob("*.tex"))
             console.print(f"Found {len(payload_files)} texture files")
 
             task = progress.add_task("Converting textures...", total=len(payload_files))
