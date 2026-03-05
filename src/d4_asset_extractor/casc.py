@@ -43,6 +43,22 @@ class CASCInfo:
         return self.total_size_bytes / (1024 ** 3)
 
 
+def _find_tool(name: str) -> Path:
+    """Find a tool in standard locations."""
+    # Check local tools/ directory first
+    local = Path("tools") / name
+    if local.exists():
+        return local
+
+    # Check user's .d4-tools directory
+    user_tools = Path.home() / ".d4-tools" / name
+    if user_tools.exists():
+        return user_tools
+
+    # Return user tools path as default
+    return user_tools
+
+
 def find_game_directory() -> Optional[Path]:
     """
     Attempt to auto-detect Diablo IV installation directory.
@@ -90,22 +106,6 @@ class CASCExtractor:
         self.game_dir = Path(game_dir)
         self.casc_console_path = casc_console_path or _find_tool("CASCConsole.exe")
         self._data_dir = self.game_dir / "Data"
-
-
-def _find_tool(name: str) -> Path:
-    """Find a tool in standard locations."""
-    # Check local tools/ directory first
-    local = Path("tools") / name
-    if local.exists():
-        return local
-
-    # Check user's .d4-tools directory
-    user_tools = Path.home() / ".d4-tools" / name
-    if user_tools.exists():
-        return user_tools
-
-    # Return local path as default (will error later if not found)
-    return local
 
     def is_valid(self) -> bool:
         """Check if this appears to be a valid Diablo IV CASC installation."""
