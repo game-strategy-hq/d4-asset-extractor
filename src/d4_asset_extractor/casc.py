@@ -19,13 +19,12 @@ from typing import Optional
 
 # Common Diablo IV installation paths
 COMMON_INSTALL_PATHS = [
-    # Windows
-    Path("C:/Program Files/Diablo IV"),
+    # Windows (x86 is typical Battle.net default)
     Path("C:/Program Files (x86)/Diablo IV"),
+    Path("C:/Program Files/Diablo IV"),
+    Path("C:/Program Files (x86)/Battle.net/Games/Diablo IV"),
     Path("D:/Games/Diablo IV"),
     Path("D:/Diablo IV"),
-    # Windows via Battle.net default
-    Path("C:/Program Files (x86)/Battle.net/Games/Diablo IV"),
     # macOS (if applicable)
     Path("/Applications/Diablo IV"),
     Path.home() / "Applications/Diablo IV",

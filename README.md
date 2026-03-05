@@ -40,7 +40,7 @@ d4-extract setup
 ### 4. Run the extraction
 
 ```powershell
-d4-extract textures "C:\Program Files\Diablo IV" .\icons --filter "2DUI*"
+d4-extract textures "C:\Program Files (x86)\Diablo IV" .\icons --filter "2DUI*"
 ```
 
 This creates an `icons` folder with extracted UI icons.
@@ -49,8 +49,9 @@ This creates an `icons` folder with extracted UI icons.
 
 The tool needs your Diablo IV installation directory.
 
-**Typical Windows path:**
+**Typical Windows paths:**
 ```
+C:\Program Files (x86)\Diablo IV
 C:\Program Files\Diablo IV
 ```
 
@@ -96,22 +97,22 @@ Options:
 
 ```powershell
 # Extract UI icons
-d4-extract textures "C:\Program Files\Diablo IV" .\icons --filter "2DUI*"
+d4-extract textures "C:\Program Files (x86)\Diablo IV" .\icons --filter "2DUI*"
 
 # Extract item icons
-d4-extract textures "C:\Program Files\Diablo IV" .\items --filter "*Item*"
+d4-extract textures "C:\Program Files (x86)\Diablo IV" .\items --filter "*Item*"
 
 # Extract skill icons
-d4-extract textures "C:\Program Files\Diablo IV" .\skills --filter "*Skill*"
+d4-extract textures "C:\Program Files (x86)\Diablo IV" .\skills --filter "*Skill*"
 
 # Extract all English strings
-d4-extract strings "C:\Program Files\Diablo IV" .\strings
+d4-extract strings "C:\Program Files (x86)\Diablo IV" .\strings
 
 # Extract German strings
-d4-extract strings "C:\Program Files\Diablo IV" .\strings --language deDE
+d4-extract strings "C:\Program Files (x86)\Diablo IV" .\strings --language deDE
 
 # Check game installation info
-d4-extract info "C:\Program Files\Diablo IV"
+d4-extract info "C:\Program Files (x86)\Diablo IV"
 ```
 
 ## Output
@@ -133,7 +134,7 @@ icons/
 
 **"Game directory not found"**
 - Verify the path contains a `Data\` folder with `.idx` files
-- Try running: `d4-extract info "C:\Program Files\Diablo IV"`
+- Try running: `d4-extract info "C:\Program Files (x86)\Diablo IV"`
 
 ## Development
 
