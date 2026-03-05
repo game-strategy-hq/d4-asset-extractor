@@ -137,27 +137,48 @@ def textures(
                 console.print(f"[yellow]No texture files found matching '{filter_pattern}'[/yellow]")
                 raise typer.Exit(0)
 
-            # Only process payload files (meta files are used for format info)
-            tex_files = [f for f in tex_files if "payload" in str(f).lower()]
-            console.print(f"Found {len(tex_files)} texture files")
+            # Find meta and payload directories
+            extracted_base = Path("extracted/textures/Base")
+            meta_dir = extracted_base / "meta" / "Texture"
+            payload_dir = extracted_base / "payload" / "Texture"
 
-            # Convert textures
-            converter = TextureConverter(
-                output_format=output_format,
-                crop=not no_crop,
-                slice_atlases=not no_slice,
-            )
+            if not meta_dir.exists() or not payload_dir.exists():
+                console.print("[red]Error:[/red] Expected meta and payload directories not found.")
+                console.print(f"  Looking for: {meta_dir}")
+                console.print(f"  And: {payload_dir}")
+                raise typer.Exit(1)
 
-            task = progress.add_task("Converting textures...", total=len(tex_files))
+            # Get payload files (the actual texture data)
+            payload_files = list(payload_dir.glob("*.tex"))
+            console.print(f"Found {len(payload_files)} texture files")
+
+            task = progress.add_task("Converting textures...", total=len(payload_files))
             converted = 0
             failed = 0
 
-            for tex_file in tex_files:
+            from .tex_converter import convert_tex_to_png
+
+            for payload_file in payload_files:
+                meta_file = meta_dir / payload_file.name
+                if not meta_file.exists():
+                    if verbose:
+                        console.print(f"[dim]Skipping {payload_file.name} - no meta file[/dim]")
+                    progress.advance(task)
+                    continue
+
                 try:
-                    converter.convert(tex_file, output)
-                    converted += 1
+                    output_path = output / f"{payload_file.stem}.{output_format}"
+                    success = convert_tex_to_png(
+                        meta_file, payload_file, output_path,
+                        crop=not no_crop
+                    )
+                    if success:
+                        converted += 1
+                    else:
+                        failed += 1
                 except Exception as e:
-                    console.print(f"[dim]Failed: {tex_file.name} - {e}[/dim]")
+                    if verbose:
+                        console.print(f"[dim]Failed: {payload_file.name} - {e}[/dim]")
                     failed += 1
                 progress.advance(task)
 
