@@ -130,7 +130,7 @@ icons/
 
 **"CASCConsole.exe not found" / "texconv.exe not found"**
 - Run: `d4-extract setup`
-- Or download manually from [CASCExplorer v0.7-alpha](https://github.com/WoW-Tools/CASCExplorer/releases/tag/v0.7-alpha) (includes CASCConsole.exe) and [DirectXTex](https://github.com/microsoft/DirectXTex/releases)
+- Or download manually: [CASCConsole.zip](https://github.com/WoW-Tools/CASCExplorer/releases) and [texconv.exe](https://github.com/microsoft/DirectXTex/releases)
 
 **"Game directory not found"**
 - Verify the path contains a `Data\` folder with `.idx` files
