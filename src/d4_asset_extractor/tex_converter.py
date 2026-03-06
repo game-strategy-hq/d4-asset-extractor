@@ -18,6 +18,8 @@ from typing import Optional
 
 from PIL import Image
 
+from .bc_decoder import decode_bc1_with_detection
+
 
 def _find_tool(name: str) -> Path:
     """Find a tool in standard locations."""
@@ -177,14 +179,124 @@ def align_up(value: int, alignment: int) -> int:
     return value + (alignment - remainder)
 
 
+def calculate_mip0_size(width: int, height: int, format_id: int) -> int:
+    """
+    Calculate the expected size in bytes for mip level 0 of a texture.
+
+    Uses the aligned width based on the format's alignment requirement,
+    matching what the DDS header will declare.
+
+    Args:
+        width: Texture width in pixels
+        height: Texture height in pixels
+        format_id: D4 texture format ID
+
+    Returns:
+        Expected byte size for mip level 0 (with alignment)
+    """
+    if format_id not in TEXTURE_FORMATS:
+        return 0
+
+    fmt = TEXTURE_FORMATS[format_id]
+    dxgi_index = fmt["dxgi_index"]
+    alignment = fmt["alignment"]
+
+    # Apply alignment to width
+    aligned_width = align_up(width, alignment)
+
+    # Block compressed formats (BC1-BC7)
+    bc_formats = {
+        71: 8,   # BC1 - 8 bytes per 4x4 block
+        74: 16,  # BC2 - 16 bytes per 4x4 block
+        77: 16,  # BC3 - 16 bytes per 4x4 block
+        80: 8,   # BC4 - 8 bytes per 4x4 block
+        83: 16,  # BC5 - 16 bytes per 4x4 block
+        95: 16,  # BC6H - 16 bytes per 4x4 block
+        96: 16,  # BC6H - 16 bytes per 4x4 block
+        98: 16,  # BC7 - 16 bytes per 4x4 block
+    }
+
+    if dxgi_index in bc_formats:
+        block_size = bc_formats[dxgi_index]
+        blocks_x = (aligned_width + 3) // 4
+        blocks_y = (height + 3) // 4
+        return blocks_x * blocks_y * block_size
+
+    # Uncompressed formats - use bits per pixel
+    bpp = BPP[dxgi_index] if dxgi_index < len(BPP) else 32
+    return (aligned_width * height * bpp) // 8
+
+
+def calculate_stored_width(payload_size: int, height: int, format_id: int) -> int:
+    """
+    Calculate the actual stored width from payload size.
+
+    D4 textures may be stored with extra row padding. This function
+    reverse-engineers the stored width from the payload size.
+
+    Args:
+        payload_size: Size of the raw payload in bytes
+        height: Texture height in pixels
+        format_id: D4 texture format ID
+
+    Returns:
+        The stored width in pixels (may be larger than declared width)
+    """
+    if format_id not in TEXTURE_FORMATS:
+        return 0
+
+    fmt = TEXTURE_FORMATS[format_id]
+    dxgi_index = fmt["dxgi_index"]
+
+    # Block compressed formats (BC1-BC7)
+    bc_formats = {
+        71: 8,   # BC1 - 8 bytes per 4x4 block
+        74: 16,  # BC2 - 16 bytes per 4x4 block
+        77: 16,  # BC3 - 16 bytes per 4x4 block
+        80: 8,   # BC4 - 8 bytes per 4x4 block
+        83: 16,  # BC5 - 16 bytes per 4x4 block
+        95: 16,  # BC6H - 16 bytes per 4x4 block
+        96: 16,  # BC6H - 16 bytes per 4x4 block
+        98: 16,  # BC7 - 16 bytes per 4x4 block
+    }
+
+    if dxgi_index in bc_formats:
+        block_size = bc_formats[dxgi_index]
+        block_rows = (height + 3) // 4
+        if block_rows == 0:
+            return 0
+        # Total blocks = payload_size / block_size
+        # blocks_per_row = total_blocks / block_rows
+        # stored_width = blocks_per_row * 4
+        total_blocks = payload_size // block_size
+        blocks_per_row = total_blocks // block_rows
+        return blocks_per_row * 4
+
+    # Uncompressed formats - use bits per pixel
+    bpp = BPP[dxgi_index] if dxgi_index < len(BPP) else 32
+    if bpp == 0 or height == 0:
+        return 0
+    bytes_per_row = payload_size // height
+    return (bytes_per_row * 8) // bpp
+
+
 def create_dds_header(
     width: int,
     height: int,
     format_id: int,
     raw_data_length: int,
+    skip_alignment: bool = False,
 ) -> bytes:
     """
     Create a DDS header for the given texture format.
+
+    Args:
+        width: Texture width (may be stored width if skip_alignment=True)
+        height: Texture height
+        format_id: D4 texture format ID
+        raw_data_length: Size of raw payload data
+        skip_alignment: If True, use width directly without alignment
+                       (use when width is already the true stored width)
 
     Returns the complete DDS file header (128 or 148 bytes for DX10).
     """
@@ -195,8 +307,8 @@ def create_dds_header(
     dxgi_index = fmt["dxgi_index"]
     alignment = fmt["alignment"]
 
-    # Align width
-    aligned_width = align_up(width, alignment)
+    # Use width directly if it's already the stored width, otherwise align
+    aligned_width = width if skip_alignment else align_up(width, alignment)
 
     # Determine FourCC code
     fourcc = FOURCC_DX10  # Default to DX10 extended header
@@ -213,7 +325,41 @@ def create_dds_header(
 
     # Calculate pitch/linear size
     bits_per_pixel = BPP[dxgi_index] if dxgi_index < len(BPP) else 32
-    pitch = (aligned_width * height * bits_per_pixel) // 8
+
+    # For block compressed formats, work in blocks (4x4 pixels)
+    is_bc_format = dxgi_index in (71, 74, 77, 80, 83, 95, 96, 98)  # BC1-BC7
+
+    if is_bc_format:
+        # BC formats: 4x4 block, either 8 bytes (BC1,BC4) or 16 bytes (BC2,BC3,BC5,BC6,BC7)
+        block_size = 8 if dxgi_index in (71, 80) else 16  # BC1/BC4 = 8, others = 16
+        blocks_x = (aligned_width + 3) // 4
+        blocks_y = (height + 3) // 4
+        expected_size = blocks_x * blocks_y * block_size
+
+        # If payload is smaller, compute effective dimensions
+        if raw_data_length > 0 and raw_data_length < expected_size:
+            total_blocks = raw_data_length // block_size
+            if total_blocks > 0 and blocks_x > 0:
+                effective_blocks_y = total_blocks // blocks_x
+                if effective_blocks_y > 0:
+                    height = effective_blocks_y * 4
+                    blocks_y = effective_blocks_y
+            expected_size = blocks_x * blocks_y * block_size
+
+        pitch = expected_size
+    else:
+        expected_size = (aligned_width * height * bits_per_pixel) // 8
+
+        # Adjust effective height if data is smaller
+        if raw_data_length > 0 and raw_data_length < expected_size and bits_per_pixel > 0:
+            bytes_per_row = (aligned_width * bits_per_pixel) // 8
+            if bytes_per_row > 0:
+                effective_height = raw_data_length // bytes_per_row
+                if effective_height > 0 and effective_height < height:
+                    height = effective_height
+                    expected_size = bytes_per_row * height
+
+        pitch = expected_size
 
     # Header size depends on whether we use DX10 extension
     use_dx10 = (fourcc == FOURCC_DX10)
@@ -299,24 +445,55 @@ def convert_raw_to_dds(
     return header + raw_data
 
 
-def dds_to_image(dds_data: bytes, texconv_path: Optional[Path] = None) -> Image.Image:
+def dds_to_image(
+    dds_data: bytes,
+    texconv_path: Optional[Path] = None,
+    force_texconv: bool = False,
+    stored_row_pitch: Optional[int] = None,
+) -> Image.Image:
     """
     Convert DDS data to a PIL Image.
 
     Uses texconv.exe for BC7/BC6H formats that PIL doesn't support,
     falls back to Pillow's built-in DDS support for simpler formats.
+    For BC1 textures with non-standard row pitch, uses pure Python decoder.
+
+    Args:
+        dds_data: Raw DDS file bytes
+        texconv_path: Optional path to texconv.exe
+        force_texconv: If True, use pure Python BC1 decoder or texconv
+                      (useful for D4 textures with non-standard BC1 layout)
+        stored_row_pitch: Optional row pitch for BC1 decoder
     """
     # First try PIL (works for BC1, BC2, BC3, uncompressed)
-    try:
-        img = Image.open(BytesIO(dds_data))
-        img.load()  # Force load to detect errors
-        return img.convert("RGBA")
-    except Exception:
-        pass
+    if not force_texconv:
+        try:
+            img = Image.open(BytesIO(dds_data))
+            img.load()  # Force load to detect errors
+            return img.convert("RGBA")
+        except Exception:
+            pass
+
+    # Check if this is a BC1/DXT1 texture - use pure Python decoder
+    if len(dds_data) > 128:
+        # Check for DXT1 FourCC at offset 84
+        fourcc = struct.unpack("<I", dds_data[84:88])[0] if len(dds_data) > 88 else 0
+        if fourcc == FOURCC_DXT1:
+            # Parse dimensions from DDS header
+            height = struct.unpack("<I", dds_data[12:16])[0]
+            width = struct.unpack("<I", dds_data[16:20])[0]
+            # Texture data starts after header (128 bytes for standard DDS)
+            texture_data = dds_data[128:]
+            return decode_bc1_with_detection(texture_data, width, height)
 
     # Fall back to texconv for BC7/BC6H formats
     texconv = texconv_path or _find_tool("texconv.exe")
     if not texconv.exists():
+        if force_texconv:
+            raise RuntimeError(
+                "texconv.exe required for this texture format. "
+                "BC7/BC6H formats need texconv on Windows."
+            )
         raise RuntimeError(
             "texconv.exe not found. Run 'd4-extract setup' to download required tools."
         )

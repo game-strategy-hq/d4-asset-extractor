@@ -47,18 +47,22 @@ dmypy.json
 # Project specific
 output/
 extracted/
+extracted_textures/
 textures/
 sample-data/
 game-data/
 D4-install/
+d4-data/
 *.tex
 *.dds
 *.stl
+fenris.rootfile
 
-# Tools (user must download)
-tools/CASCConsole.exe
-tools/CASCExplorer.exe
-tools/texconv.exe
+# Tools directory (large binaries, user downloads separately)
+tools/
+
+# Cache
+.cache/
 
 # Search index
 .sprite-index.json

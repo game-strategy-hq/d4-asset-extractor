@@ -23,8 +23,8 @@ classifiers = [
 ]
 
 dependencies = [
+    "numpy>=1.24.0",
     "pillow>=10.0.0",
-    "imagehash>=4.3.0",
     "rich>=13.0.0",
     "typer>=0.9.0",
 ]
@@ -37,8 +37,7 @@ dev = [
 ]
 
 [project.scripts]
-d4-extract = "d4_asset_extractor.cli:main"
-d4-search = "d4_asset_extractor.search:main"
+d4-extract = "d4_asset_extractor.cli:main_entry"
 
 [project.urls]
 Homepage = "https://github.com/game-strategy-hq/d4-asset-extractor"

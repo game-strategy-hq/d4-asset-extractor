@@ -1,157 +1,244 @@
 # Diablo IV Asset Extractor
 
-Extract icons and textures from Diablo IV game files. This tool reads the game's CASC archives and exports individual PNG files.
+Pure Python tool for extracting textures from Diablo IV game files. No external tools required.
 
-## What This Does
+## Quick Start
 
-- Extracts UI icons, skill icons, item icons from the Windows version of Diablo IV
-- Outputs individual PNG files with transparency
-- Handles texture decompression (BC1, BC3, BC7, etc.)
-- Parses StringList files for game text
-
-## Quick Start (Windows)
-
-### 1. Install Git
-
-Download and install Git from: https://git-scm.com/download/win
-
-Click "Next" through all the options (defaults are fine).
-
-**Close and reopen PowerShell after installing Git.**
-
-### 2. Install uv
-
-uv is a fast Python package manager that automatically handles Python for you.
-
-Open **PowerShell** and run:
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-**Close and reopen PowerShell after installing.**
-
-### 3. Install the extractor and download tools
-
-```powershell
+```bash
+# Install
 uv tool install git+https://github.com/game-strategy-hq/d4-asset-extractor
-d4-extract setup
+
+# Extract UI textures
+d4-extract extract "/path/to/Diablo IV"
+
+# Extract with different filter
+d4-extract extract "/path/to/Diablo IV" --filter "Items*"
+
+# Slice texture atlases into individual icons
+d4-extract icons "/path/to/Diablo IV"
+
+# List available textures
+d4-extract list "/path/to/Diablo IV" --filter "*"
+
+# Show game version info
+d4-extract info "/path/to/Diablo IV"
 ```
 
-### 4. Run the extraction
-
-```powershell
-d4-extract textures "C:\Program Files (x86)\Diablo IV" .\icons --filter "2DUI*"
+**Output:**
+```
+d4-data/
+├── textures/     # Full texture sheets as PNG
+├── icons/        # Individual icons sliced from atlases
+└── version.txt   # Game version extracted from
 ```
 
-This creates an `icons` folder with extracted UI icons.
+**Game paths:**
+- Windows: `C:\Program Files (x86)\Diablo IV`
+- macOS: `/Applications/Diablo IV`
 
-## Finding Your Game Files
+---
 
-The tool needs your Diablo IV installation directory.
+## How It Works
 
-**Typical Windows paths:**
-```
-C:\Program Files (x86)\Diablo IV
-C:\Program Files\Diablo IV
-```
+Understanding the extraction pipeline helps contributors navigate the codebase and avoid past pitfalls.
 
-This folder should contain:
-- `Data\` folder with `data.000`, `data.001`, etc.
-- `Data\` folder with `.idx` files
-- `.build.info` file
+### The CASC Storage System
 
-## Usage
-
-### Extracting Textures
+Diablo IV uses Blizzard's **CASC** (Content Addressable Storage Container) system. Unlike traditional file systems, CASC is content-addressed: files are identified by cryptographic hashes of their contents, not by paths.
 
 ```
-d4-extract textures <GAME_DIR> [OUTPUT_DIR] [OPTIONS]
-
-Arguments:
-  GAME_DIR    Path to Diablo IV installation
-  OUTPUT_DIR  Directory to save extracted PNGs (default: ./textures)
-
-Options:
-  --filter, -f   Filter pattern (e.g., "2DUI*", "Items*", "Skill*")
-  --format, -o   Output format: png, jpg, webp (default: png)
-  --no-crop      Disable transparent border cropping
-  --no-slice     Disable atlas slicing
-  --help         Show help message
+Diablo IV/Data/
+├── .build.info          # Build metadata, points to config files
+├── config/              # Build configs with encoding keys
+├── data/
+│   ├── data.000-0XX     # Archive files containing actual data
+│   └── *.idx            # Index files mapping keys to archive locations
+└── indices/             # Additional index journals
 ```
 
-### Extracting Strings
+**Key concepts:**
+
+| Term | Description |
+|------|-------------|
+| **Content Key (ckey)** | Hash of file contents. Same content = same ckey, even across versions. |
+| **Encoded Key (ekey)** | Hash of the encoded/compressed data. Used to locate data in archives. |
+| **Encoding file** | Maps ckeys to ekeys. "I have content X, where's the compressed version?" |
+| **BLTE** | Blizzard's container format. Handles compression (zlib) and chunking. |
+| **TVFS** | Virtual file system. Maps human paths (`base/payload/123456.tex`) to ckeys. |
+
+**Our pipeline:**
 
 ```
-d4-extract strings <GAME_DIR> [OUTPUT_DIR] [OPTIONS]
-
-Arguments:
-  GAME_DIR    Path to Diablo IV installation
-  OUTPUT_DIR  Directory to save JSON files (default: ./strings)
-
-Options:
-  --language, -l  Language code: enUS, deDE, frFR, etc. (default: enUS)
-  --help          Show help message
+.build.info → config files → encoding file → .idx files → data.XXX archives
+                                   ↓
+                            TVFS manifest
+                                   ↓
+                         path → ckey → ekey → archive location → BLTE decompress
 ```
 
-## Examples
+### Texture Storage
 
-```powershell
-# Extract UI icons
-d4-extract textures "C:\Program Files (x86)\Diablo IV" .\icons --filter "2DUI*"
+D4 textures are split across two systems:
 
-# Extract item icons
-d4-extract textures "C:\Program Files (x86)\Diablo IV" .\items --filter "*Item*"
+1. **Texture definitions** (`Texture-Base-Global.dat`) - Metadata: dimensions, format, mip count
+2. **Texture payloads** (`base/payload/<sno_id>.tex`) - Raw pixel data in DDS-compatible formats
 
-# Extract skill icons
-d4-extract textures "C:\Program Files (x86)\Diablo IV" .\skills --filter "*Skill*"
+The definition contains a `0xFFFFFFFF` marker followed by structured metadata. The payload is raw BC1/BC3/BC7/etc compressed blocks that can be wrapped in a DDS header and decoded.
 
-# Extract all English strings
-d4-extract strings "C:\Program Files (x86)\Diablo IV" .\strings
+**Texture formats we handle:**
 
-# Extract German strings
-d4-extract strings "C:\Program Files (x86)\Diablo IV" .\strings --language deDE
+| Format | DXGI Name | Description |
+|--------|-----------|-------------|
+| BC1 | DXT1 | 4:1 compression, 1-bit alpha |
+| BC3 | DXT5 | 4:1 compression, smooth alpha |
+| BC4 | ATI1 | Single channel (grayscale) |
+| BC5 | ATI2 | Two channel (normal maps) |
+| BC6H | - | HDR compression |
+| BC7 | - | High quality, variable compression |
+| RGBA | B8G8R8A8 | Uncompressed 32-bit |
 
-# Check game installation info
-d4-extract info "C:\Program Files (x86)\Diablo IV"
+---
+
+## Known Limitations
+
+### BC1 Interleaved Textures
+
+**Problem:** Some BC1 textures use a proprietary interleaved format that no public tool can decode.
+
+These textures store data with alternating 8-byte blocks:
+```
+Block 0: DATA (actual BC1 block)
+Block 1: ZERO (8 null bytes)
+Block 2: DATA
+Block 3: ZERO
+...
 ```
 
-## Output
+When a decoder reads expected size based on dimensions, it gets ~50% zero blocks mixed in, producing corrupted rainbow-stripe output.
 
-The tool creates a flat directory of PNG files:
+**What we do:** Detect >30% zero blocks and raise `InterleavedBC1Error` with a clear message instead of producing garbage.
+
+**Affected textures:** Primarily `2DInventory_Bundle_*` textures. Most `2DUI*` textures extract fine.
+
+**We investigated every public D4 project:**
+- `d4-texture-extractor` - Fails (README acknowledges "some DDS files might not be valid")
+- `d4Tex` (Noesis plugin) - Uses standard decoder, no special handling
+- `d4parse` - Uploads raw data to GPU, no preprocessing
+
+**Conclusion:** This appears to be a proprietary D4 format with no public solution. If you solve this, please contribute!
+
+### Texture Definition Variants
+
+Not all entries in `Texture-Base-Global.dat` are actual textures:
+- **62%** have the `0xFFFFFFFF` marker with full metadata (these work)
+- **22%** are metadata-only entries (atlas UV coordinates, no pixels)
+- **16%** have the marker at unusual offsets or are truncated
+
+Current extraction rate for `2DUI*` textures is ~68%.
+
+### Encrypted Files
+
+~0.8% of CASC files use `E` (encrypted) BLTE encoding. These are exclusively `EncryptedNameDict-*.dat` files used for path obfuscation. No actual game content is affected. We return `None` for these files.
+
+---
+
+## Architecture
+
 ```
-icons/
-  2DUI_Icons_Item_Helm_001.png
-  2DUI_Icons_Item_Weapon_Sword.png
-  2DUI_Icons_Skill_Barbarian_Bash.png
-  ...
+┌─────────────────────────────────────────────────────────────────┐
+│                         CLI (cli.py)                            │
+│              extract / list / info / icons                      │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│               TextureExtractor (texture_extractor.py)           │
+│  • Loads Texture-Base-Global.dat definitions                    │
+│  • Maps SNO IDs to texture metadata                             │
+│  • Coordinates payload reading + image conversion               │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│                 D4CASCReader (casc_reader.py)                   │
+│  • Parses .build.info and config files                          │
+│  • Reads .idx files (780K+ entries)                             │
+│  • Parses encoding file (1.3M ckey→ekey mappings)               │
+│  • Reads data.XXX with BLTE decompression                       │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│                  TVFSParser (tvfs_parser.py)                    │
+│  • Parses VFS-2 manifest (846K virtual files)                   │
+│  • Maps paths like base/payload/123.tex to content keys         │
+│  • Parses CoreTOC.dat for SNO ID → human name mapping           │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## Troubleshooting
+**Supporting modules:**
 
-**"CASCConsole.exe not found" / "texconv.exe not found"**
-- Run: `d4-extract setup`
-- Or download manually: [CASCConsole.zip](https://github.com/WoW-Tools/CASCExplorer/releases) and [texconv.exe](https://github.com/microsoft/DirectXTex/releases)
+| File | Purpose |
+|------|---------|
+| `tex_converter.py` | DDS header creation, format mapping, PIL conversion |
+| `bc_decoder.py` | Pure Python BC1 decoder (based on DirectXTex) |
 
-**"Game directory not found"**
-- Verify the path contains a `Data\` folder with `.idx` files
-- Try running: `d4-extract info "C:\Program Files (x86)\Diablo IV"`
+### Why Pure Python?
+
+Previous approaches used external tools:
+- `CASCConsole.exe` - Windows-only, requires .NET
+- `texconv.exe` - Windows-only, can't handle D4's BC1 interleaving anyway
+
+Pure Python means:
+- Cross-platform (Windows, macOS, Linux)
+- Single `uv tool install` with no system dependencies
+- Full control over edge case handling
+
+---
 
 ## Development
 
-```powershell
-# Clone the repo
+```bash
 git clone https://github.com/game-strategy-hq/d4-asset-extractor
 cd d4-asset-extractor
-
-# Run locally
-uv run d4-extract --help
-
-# Install locally for testing
-uv tool install .
+uv sync
+uv run d4-extract info "/path/to/Diablo IV"
 ```
+
+### Project Structure
+
+```
+src/d4_asset_extractor/
+├── cli.py                # Typer CLI commands
+├── texture_extractor.py  # High-level extraction API
+├── casc_reader.py        # CASC archive reading
+├── tvfs_parser.py        # Virtual filesystem parsing
+├── tex_converter.py      # DDS/texture format handling
+└── bc_decoder.py         # BC1 block decompression
+```
+
+### Key Files in D4 Install
+
+```
+Data/
+├── .build.info                    # Start here: build config pointers
+├── config/<hash>                  # Build config with encoding/vfs keys
+├── data/
+│   ├── 0000000000000000.idx      # File index (ekey → archive location)
+│   └── data.000-0XX              # Data archives
+└── Texture-Base-Global.dat        # Texture definitions (via TVFS)
+```
+
+---
+
+## Resources
+
+For deeper understanding, see [RESOURCES.md](RESOURCES.md) which catalogs all reference materials:
+
+- [CASC Format Spec](https://wowdev.wiki/CASC) - Authoritative format documentation
+- [TVFS Documentation](https://wowdev.wiki/TVFS) - Virtual filesystem layer
+- [d4-texture-extractor](https://github.com/adainrivers/d4-texture-extractor) - Reference implementation (Node.js)
+- [DirectXTex](https://github.com/microsoft/DirectXTex) - BC decoder reference
+
+---
 
 ## License
 
-MIT
-
-**Note:** Game assets remain property of Blizzard Entertainment. Do not redistribute extracted assets.
+MIT. Game assets remain property of Blizzard Entertainment.
