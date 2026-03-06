@@ -23,7 +23,7 @@ The foundational technology for D4 file storage.
 
 | Resource | URL | Description |
 |----------|-----|-------------|
-| **CASCExplorer** | https://github.com/WoW-Tools/CASCExplorer | Primary GUI/CLI tool for CASC extraction. Used as the extraction backend. |
+| **CASCExplorer** | https://github.com/WoW-Tools/CASCExplorer | GUI/CLI tool for CASC extraction. Reference implementation. |
 | **CASCExplorer Releases** | https://github.com/WoW-Tools/CASCExplorer/releases | Download page for CASCConsole.exe. |
 | **Ladik's CASC Viewer** | https://www.hiveworkshop.com/threads/ladiks-casc-viewer.331540/ | Alternative CASC browser. |
 | **jybp/casc** | https://github.com/jybp/casc | Rust library for CASC extraction - reference for format understanding. |
@@ -68,7 +68,6 @@ The pure Python BC1 decoder (`bc_decoder.py`) is based on Microsoft's DirectXTex
 ### Key Learnings from d4-texture-extractor
 
 - `.tex` files require conversion to DDS intermediate format
-- CASCConsole.exe handles the CASC extraction layer
 - Texture filtering by pattern (e.g., `2DUI*`) isolates icon sets
 - Atlas slicing needed for combined texture sheets
 - Output formats: PNG (lossless), WebP (efficient), JPG (legacy)
@@ -255,20 +254,13 @@ Tools for gathering data from existing websites.
 
 ## Architecture Decisions
 
-### Why Python (mirroring di-asset-extractor)?
+### Why Pure Python?
 
-- Consistent with existing di-asset-extractor project
+- Cross-platform (Windows, macOS, Linux) without Wine or .NET
+- Single `uv tool install` with no system dependencies
+- Full control over edge cases (BC1 interleaving detection)
 - PIL/Pillow for image processing
 - Rich ecosystem for CLI tools (typer, rich)
-- Easy JSON handling for data export
-- imagehash library for perceptual search
-
-### Why wrap CASCConsole instead of native CASC?
-
-- CASCExplorer is battle-tested and actively maintained
-- Pure Python CASC implementation would be significant effort
-- Wrapper approach allows focusing on D4-specific logic
-- Can be replaced with native implementation later
 
 ### Key Differences from Diablo Immortal
 
