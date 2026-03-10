@@ -39,6 +39,7 @@ source = { editable = "." }
 dependencies = [
     { name = "numpy" },
     { name = "pillow" },
+    { name = "pydds" },
     { name = "rich" },
     { name = "typer" },
 ]
@@ -55,6 +56,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pillow", specifier = ">=10.0.0" },
+    { name = "pydds", specifier = ">=0.0.8" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
@@ -404,6 +406,24 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
+]
+
+[[package]]
+name = "pydds"
+version = "0.0.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pillow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cb/44/b64bb9ed98c9012e22d463e3d0ca06cd03b24230dc652a500d0c3518f03e/pydds-0.0.8.tar.gz", hash = "sha256:b505ad2fef2cbd48d492a4237ed7ee809a2195cc74d38952601762a66f60a193", size = 671794, upload-time = "2023-08-16T19:08:35.972Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/82/c9/83b491bbd16985f7d6d5df0d5572603c15709c7174a886761224b1f8cb76/pydds-0.0.8-cp38-abi3-macosx_10_9_universal2.whl", hash = "sha256:d85038379d80989af58fdb16ac99fdf283e699ac88dc1197671dd8e862ddeaa5", size = 456510, upload-time = "2023-08-16T19:08:25.924Z" },
+    { url = "https://files.pythonhosted.org/packages/3f/ad/f62169e6c4122c8875a73bffb482728fc6d5e0235078d7f683aebcecdc19/pydds-0.0.8-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9bd1447b826426391ba420e663ff6e17a75feff1d1b83e04b95a0ffca2357bc9", size = 1350512, upload-time = "2023-08-16T19:08:27.774Z" },
+    { url = "https://files.pythonhosted.org/packages/12/01/abd5b7149968366ad218668d41d1ea3bcd9740c41b79f584b9217b4e54bb/pydds-0.0.8-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:4c48f9ac193f537065c08a9e09a2ff41eb760ddf62eb58780cf5fd18b10c9117", size = 1465222, upload-time = "2023-08-16T19:08:29.497Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/05/ca332aa9bdb7865de344493391f8a8207af3e4ec1ade22ff76387c664867/pydds-0.0.8-cp38-abi3-musllinux_1_1_aarch64.whl", hash = "sha256:c741f60e82a8246e853fe2f0d09288c1de24cc55262cd005bff3cad8158348c5", size = 1964927, upload-time = "2023-08-16T19:08:31.209Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/37/e2e9b19921a4964cd1b8747b312338762956b3cd9b18e8bb2a442e45e78d/pydds-0.0.8-cp38-abi3-musllinux_1_1_x86_64.whl", hash = "sha256:cd6dd872a45834aa96fb4074bf9162ef91558cfec118b81e03b2bc8bf62c02d0", size = 2098805, upload-time = "2023-08-16T19:08:32.687Z" },
+    { url = "https://files.pythonhosted.org/packages/58/0f/0cfbdccc7bd37116311c0e0a27e9273945deaecaa2ce7ac6d17065ba881f/pydds-0.0.8-cp38-abi3-win_amd64.whl", hash = "sha256:0195a4b544743afd3aced8132778fed45c3f5fd097ac74ec2ad58a542dba02ef", size = 77997, upload-time = "2023-08-16T19:08:33.939Z" },
+    { url = "https://files.pythonhosted.org/packages/b0/90/9e02469073116b3e8757c992d7cf83ac14f6e82eaff05a43c2a9c5d03d67/pydds-0.0.8-cp38-abi3-win_arm64.whl", hash = "sha256:0af3ed978f181f56fb0704425fe769f9925db3d33891a22209be240b349ceee1", size = 68274, upload-time = "2023-08-16T19:08:34.842Z" },
 ]
 
 [[package]]

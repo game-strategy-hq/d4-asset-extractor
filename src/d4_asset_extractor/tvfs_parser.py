@@ -287,6 +287,105 @@ SNO_EXTENSIONS = {
 }
 
 
+def parse_encrypted_snos(data: bytes) -> set[int]:
+    """
+    Parse EncryptedSNOs.dat to get the set of encrypted SNO IDs.
+
+    The file format is a simple list of 4-byte little-endian SNO IDs,
+    optionally prefixed with a header.
+
+    Args:
+        data: Raw binary data from EncryptedSNOs.dat
+
+    Returns:
+        Set of encrypted SNO IDs
+    """
+    encrypted_ids: set[int] = set()
+    pos = 0
+
+    if len(data) < 4:
+        return encrypted_ids
+
+    # Check for a count header (common pattern in D4 files)
+    # The first 4 bytes might be a count, or it might be the first SNO ID
+    first_val = struct.unpack("<I", data[0:4])[0]
+
+    # Heuristic: if the first value * 4 equals remaining data length,
+    # it's likely a count header
+    remaining_len = len(data) - 4
+    if first_val > 0 and first_val * 4 == remaining_len:
+        # Has count header
+        count = first_val
+        pos = 4
+        for _ in range(count):
+            if pos + 4 > len(data):
+                break
+            sno_id = struct.unpack("<I", data[pos:pos + 4])[0]
+            encrypted_ids.add(sno_id)
+            pos += 4
+    else:
+        # No count header - just a list of SNO IDs
+        # Parse all 4-byte aligned values
+        while pos + 4 <= len(data):
+            sno_id = struct.unpack("<I", data[pos:pos + 4])[0]
+            # Skip obviously invalid IDs (0 or very large values)
+            if 0 < sno_id < 0x7FFFFFFF:
+                encrypted_ids.add(sno_id)
+            pos += 4
+
+    return encrypted_ids
+
+
+# Magic for shared payloads and replaced SNOs mapping files
+MAPPING_FILE_MAGIC = 0xABBA0003
+
+
+def parse_shared_payloads_mapping(data: bytes) -> dict[int, int]:
+    """
+    Parse CoreTOCSharedPayloadsMapping.dat to get SNO payload redirects.
+
+    This file contains mappings from one SNO ID to another, indicating that
+    the payload for the first SNO should be loaded from the second SNO's
+    payload location instead.
+
+    File format:
+        - 4 bytes: Magic (0xABBA0003)
+        - 4 bytes: Unknown field (possibly hash or version)
+        - N × 8 bytes: Pairs of (source_sno_id, target_sno_id)
+
+    Args:
+        data: Raw binary data from CoreTOCSharedPayloadsMapping.dat
+
+    Returns:
+        Dict mapping source_sno_id to target_sno_id (redirect)
+    """
+    redirects: dict[int, int] = {}
+
+    if len(data) < 8:
+        return redirects
+
+    # Check magic
+    magic = struct.unpack("<I", data[0:4])[0]
+    if magic != MAPPING_FILE_MAGIC:
+        return redirects
+
+    # Skip header (magic + unknown field)
+    offset = 8
+
+    # Parse pairs of (source_sno_id, target_sno_id)
+    while offset + 8 <= len(data):
+        source_sno = struct.unpack("<I", data[offset:offset + 4])[0]
+        target_sno = struct.unpack("<I", data[offset + 4:offset + 8])[0]
+
+        # Store the redirect mapping
+        if source_sno > 0 and target_sno > 0:
+            redirects[source_sno] = target_sno
+
+        offset += 8
+
+    return redirects
+
+
 def parse_core_toc(data: bytes) -> dict[int, SNOInfo]:
     """
     Parse CoreTOC.dat to get SNO ID to name mappings.

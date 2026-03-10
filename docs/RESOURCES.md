@@ -44,27 +44,6 @@ Resources for understanding D4 texture formats and conversion.
 | **d4-texture-extractor** | https://github.com/adainrivers/d4-texture-extractor | Node.js tool that extracts and converts D4 .tex files. Primary reference for texture pipeline. Archived May 2025 but functional. |
 | **DirectXTex (texconv)** | https://github.com/microsoft/DirectXTex | Microsoft's texture processing tools. Used for DDS conversion. |
 
-### DirectXTex BC1 Decoder
-
-The pure Python BC1 decoder (`bc_decoder.py`) is based on Microsoft's DirectXTex implementation:
-
-**Source Files:**
-- `DirectXTex/BC.h` - BC1 block structure definition
-- `DirectXTex/BC.cpp` - DecodeBC1 function implementation
-
-**Key Algorithm:**
-1. Each BC1 block is 8 bytes encoding a 4x4 pixel region
-2. First 4 bytes: two RGB565 endpoint colors
-3. Last 4 bytes: 32-bit bitmap with 2-bit index per pixel
-4. If color0 > color1: 4-color opaque mode (2 interpolated colors)
-5. If color0 ≤ color1: 3-color + transparent mode
-
-**Why Pure Python:**
-- D4 stores some BC1 textures with non-standard row padding
-- PIL cannot handle the interleaved data format (causes vertical line artifacts)
-- texconv.exe is Windows-only
-- Pure Python decoder handles custom row pitch for cross-platform support
-
 ### Key Learnings from d4-texture-extractor
 
 - `.tex` files require conversion to DDS intermediate format
@@ -72,72 +51,9 @@ The pure Python BC1 decoder (`bc_decoder.py`) is based on Microsoft's DirectXTex
 - Atlas slicing needed for combined texture sheets
 - Output formats: PNG (lossless), WebP (efficient), JPG (legacy)
 
-### BC1 Interleaved Textures (Known Limitation)
+### BC1 Interleaved Textures
 
-Some D4 BC1 textures (formats 9, 10, 46, 47) use a proprietary interleaved storage format
-that **neither this project nor the reference d4-texture-extractor can decode correctly**.
-
-**The Problem:**
-
-These textures store data with strictly alternating 8-byte blocks:
-```
-Block 0: DATA (actual BC1 block)
-Block 1: ZERO (8 zero bytes)
-Block 2: DATA
-Block 3: ZERO
-...
-```
-
-The interleaving starts at byte 0 of the payload. When DirectXTex (texconv) loads the DDS:
-
-1. It reads dimensions from header (e.g., 512x512)
-2. Computes expected BC1 size: `(512/4) × (512/4) × 8 = 131072 bytes`
-3. Copies exactly 131072 bytes from start of payload
-4. **Those bytes contain ~36% zero blocks due to interleaving**
-5. BC1 decoder produces corrupted/rainbow-striped output
-
-**Evidence from DirectXTex source (`DirectXTexDDS.cpp:1620-1623`):**
-```cpp
-if (IsCompressed(metadata.format))
-{
-    size_t csize = std::min<size_t>(images[index].slicePitch, timages[index].slicePitch);
-    memcpy(pDest, pSrc, csize);  // Copies interleaved data as-is
-}
-```
-
-**The reference project acknowledges this in README.md:**
-> "Some of the intermediate DDS files might not be valid, which can cause texconv to fail."
-
-**Our Behavior:**
-
-We detect >30% zero blocks in BC1 payloads and raise `InterleavedBC1Error` with a clear
-message, rather than producing corrupted output silently.
-
-**Affected Textures:**
-
-Primarily inventory/bundle textures like `2DInventory_Bundle_HArmor_*`. Most UI textures
-(`2DUI*`) with BC1 format have <30% zeros and extract correctly.
-
-**Other Projects Investigated (March 2025):**
-
-We analyzed all known D4 texture extraction projects. None solve this issue:
-
-| Project | Approach | Result |
-|---------|----------|--------|
-| **d4-texture-extractor** | DDS + texconv.exe | Fails (README acknowledges) |
-| **d4Tex** (UuPhan) | Noesis plugin | Uses standard `imageDecodeDXT()` - no special handling |
-| **d4parse** (Dakota628) | Go + OpenGL | Uploads to GPU directly - no byte-level preprocessing |
-
-- **d4Tex**: Calculates width from `size / (height * 0.5)` but relies entirely on Noesis's
-  native BC1 decoder. No handling for interleaved zeros.
-
-- **d4parse**: Has "payload" vs "paylow" dual-file system, but this is for mipmap-level
-  separation (streaming optimization), not for handling interleaved zeros within BC1 blocks.
-  Uses `gl.CompressedTexImage2D()` to upload raw data to GPU.
-
-**Conclusion:** The interleaved BC1 format appears to be proprietary to D4 with no public
-solution. All projects either fail silently or avoid the problem by using external decoders
-that also fail on this data.
+Some D4 BC1 textures use a proprietary interleaved storage format with alternating data/zero blocks. texconv.exe handles these correctly when provided with the full payload data.
 
 ---
 
@@ -254,13 +170,12 @@ Tools for gathering data from existing websites.
 
 ## Architecture Decisions
 
-### Why Pure Python?
+### Why Python + texconv?
 
-- Cross-platform (Windows, macOS, Linux) without Wine or .NET
-- Single `uv tool install` with no system dependencies
-- Full control over edge cases (BC1 interleaving detection)
-- PIL/Pillow for image processing
-- Rich ecosystem for CLI tools (typer, rich)
+- **CASC reading**: Pure Python for cross-platform archive extraction
+- **Texture decoding**: texconv.exe handles all BC formats correctly
+- **macOS support**: Whisky (Wine wrapper) runs texconv transparently
+- **CLI**: typer + rich for user-friendly interface
 
 ### Key Differences from Diablo Immortal
 

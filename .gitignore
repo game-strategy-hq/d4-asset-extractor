@@ -38,6 +38,10 @@ ENV/
 htmlcov/
 .tox/
 .nox/
+# Test fixtures (regenerate with scripts/build_test_fixtures.py)
+tests/fixtures/textures/*.meta
+tests/fixtures/textures/*.payload
+tests/fixtures/textures/*.json
 
 # Type checking
 .mypy_cache/
@@ -48,11 +52,10 @@ dmypy.json
 output/
 extracted/
 extracted_textures/
-textures/
+/textures/
 sample-data/
 game-data/
 D4-install/
-d4-data/
 *.tex
 *.dds
 *.stl

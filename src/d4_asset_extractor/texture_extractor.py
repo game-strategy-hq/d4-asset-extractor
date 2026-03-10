@@ -1,22 +1,28 @@
 """
 Texture extraction pipeline for Diablo IV.
 
-This module provides a high-level API for extracting textures from D4 CASC storage
-using pure Python (no external tools required for most formats).
+This module provides a high-level API for extracting textures from D4 CASC storage.
+Uses texconv as the primary decoder for BC-compressed textures when available.
 """
 
+import math
 import struct
 from dataclasses import dataclass
-from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 from PIL import Image
 
 from .casc_reader import D4CASCReader, read_cascfile
 from .tex_converter import TEXTURE_FORMATS, calculate_mip0_size, create_dds_header, dds_to_image
-from .tvfs_parser import VfsRootEntry, parse_tvfs_files, parse_core_toc
+from .texconv import TexconvConfig, TexconvWrapper, is_available as texconv_is_available
+from .tvfs_parser import (
+    VfsRootEntry,
+    parse_tvfs_files,
+    parse_core_toc,
+    parse_encrypted_snos,
+    parse_shared_payloads_mapping,
+)
 
 
 class TextureExtractionError(Exception):
@@ -26,6 +32,16 @@ class TextureExtractionError(Exception):
 
 class InterleavedBC1Error(TextureExtractionError):
     """BC1 texture uses D4's proprietary interleaved format (requires Windows texconv)."""
+    pass
+
+
+class EncryptedSNOError(TextureExtractionError):
+    """SNO is encrypted and cannot be extracted without decryption keys."""
+    pass
+
+
+class SharedPayloadError(TextureExtractionError):
+    """Error when following shared payload redirect."""
     pass
 
 
@@ -65,57 +81,52 @@ def parse_texture_definition(data: bytes, sno_id: int) -> Optional[TextureInfo]:
     """
     Parse a texture definition from Texture-Base-Global.dat.
 
-    The definition has a variable-length header. We find the 0xFFFFFFFF marker
-    and parse relative to that position.
+    Field offsets are derived from the TextureDefinition type in d4data's definitions.json
+    (type hash 3631735738). The structure is parsed using fixed offsets rather than
+    marker-based heuristics.
+
+    Source: https://github.com/DiabloTools/d4data
+        - definitions.json: TextureDefinition type with field offsets
+        - parse.js: parseCombinedMetaFile() and readStructure()
+
+    TextureDefinition field offsets (from definitions.json):
+        offset  0: SNO ID (4 bytes) - validated against expected sno_id
+        offset  8: sUIStylePreset
+        offset 12: eTexFormat (4 bytes) - texture compression format
+        offset 16: dwVolumeXSlices (2 bytes)
+        offset 18: dwVolumeYSlices (2 bytes)
+        offset 20: dwWidth (2 bytes)
+        offset 22: dwHeight (2 bytes)
+        offset 24: dwDepth (4 bytes)
+        offset 28: dwFaceCount (1 byte)
+        offset 29: dwMipMapLevelMin (1 byte)
+        offset 30: dwMipMapLevelMax (1 byte)
+        offset 40: rgbavalAvgColor (16 bytes - 4 floats)
     """
-    # Find 0xFFFFFFFF marker in the data
-    marker_offset = -1
-    for i in range(0, min(256, len(data) - 4), 4):
-        val = struct.unpack("<I", data[i : i + 4])[0]
-        if val == 0xFFFFFFFF:
-            marker_offset = i
-            break
-
-    if marker_offset == -1:
+    if len(data) < 56:  # Minimum size for required fields
         return None
 
-    # The structure relative to marker:
-    # marker-8: SNO ID (we use the passed sno_id instead)
-    # marker: 0xFFFFFFFF
-    # marker+4: format_id
-    # marker+8: volume slices
-    # marker+12: width, height
-    # etc.
-    sno_id_offset = marker_offset - 8
-    if sno_id_offset < 0:
+    # Validate SNO ID at offset 0
+    stored_sno_id = struct.unpack("<I", data[0:4])[0]
+    if stored_sno_id != sno_id:
         return None
 
-    base = sno_id_offset
+    # Parse fields using fixed offsets from TextureDefinition type
+    format_id = struct.unpack("<I", data[12:16])[0]
+    width = struct.unpack("<H", data[20:22])[0]
+    height = struct.unpack("<H", data[22:24])[0]
+    depth = struct.unpack("<I", data[24:28])[0]
+    face_count = data[28] if len(data) > 28 else 1
+    mipmap_min = data[29] if len(data) > 29 else 0
+    mipmap_max = data[30] if len(data) > 30 else 0
 
-    # Validate we have enough data
-    if base + 0x30 > len(data):
-        return None
-
-    # Check for 0xFFFFFFFF marker at base+8
-    marker = struct.unpack("<I", data[base + 8 : base + 12])[0]
-    if marker != 0xFFFFFFFF:
-        return None
-
-    format_id = struct.unpack("<I", data[base + 12 : base + 16])[0]
-    width = struct.unpack("<H", data[base + 20 : base + 22])[0]
-    height = struct.unpack("<H", data[base + 22 : base + 24])[0]
-    depth = struct.unpack("<I", data[base + 24 : base + 28])[0]
-    face_count = data[base + 28] if base + 28 < len(data) else 1
-    mipmap_min = data[base + 29] if base + 29 < len(data) else 1
-    mipmap_max = data[base + 30] if base + 30 < len(data) else 1
-
-    # Average color
+    # Average color at offset 40 (rgbavalAvgColor)
     avg_r = avg_g = avg_b = avg_a = 0.0
-    if base + 0x44 <= len(data):
-        avg_r = struct.unpack("<f", data[base + 0x34 : base + 0x38])[0]
-        avg_g = struct.unpack("<f", data[base + 0x38 : base + 0x3C])[0]
-        avg_b = struct.unpack("<f", data[base + 0x3C : base + 0x40])[0]
-        avg_a = struct.unpack("<f", data[base + 0x40 : base + 0x44])[0]
+    if len(data) >= 56:
+        avg_r = struct.unpack("<f", data[40:44])[0]
+        avg_g = struct.unpack("<f", data[44:48])[0]
+        avg_b = struct.unpack("<f", data[48:52])[0]
+        avg_a = struct.unpack("<f", data[52:56])[0]
 
     return TextureInfo(
         sno_id=sno_id,
@@ -136,77 +147,99 @@ def parse_texture_frames(
     data: bytes, tex_width: int, tex_height: int
 ) -> list[TextureFrame]:
     """
-    Parse frame/slice data from a texture definition.
+    Parse frame/slice data from a texture definition in Texture-Base-Global.dat.
 
-    Scans for UV coordinate rectangles that define sub-regions of the texture.
-    These are used for texture atlases containing multiple icons/sprites.
+    The structure in Texture-Base-Global.dat differs from standalone .tex files.
+    We search for consecutive valid frame structures by looking for UV coordinate patterns.
 
     Args:
-        data: Raw texture definition data
+        data: Raw texture definition data from Texture-Base-Global.dat
         tex_width: Texture width in pixels
         tex_height: Texture height in pixels
 
     Returns:
-        List of TextureFrame objects, deduplicated and sorted by position
+        List of TextureFrame objects
     """
     frames = []
-    seen = set()  # Track unique frames by (x, y, w, h)
+    frame_size = 0x24  # 36 bytes per frame
 
-    for i in range(0, len(data) - 16, 4):
+    if len(data) < 0xC0:
+        return frames
+
+    # Search for first valid frame by scanning for UV coordinate patterns
+    # A valid frame has: image_handle (4 bytes), u0, v0, u1, v1 (4 floats)
+    # where all UVs are in 0-1 range and u1 > u0, v1 > v0
+    frame_start = -1
+
+    for offset in range(0xC0, len(data) - frame_size, 4):
         try:
-            u0 = struct.unpack("<f", data[i : i + 4])[0]
-            v0 = struct.unpack("<f", data[i + 4 : i + 8])[0]
-            u1 = struct.unpack("<f", data[i + 8 : i + 12])[0]
-            v1 = struct.unpack("<f", data[i + 12 : i + 16])[0]
+            u0 = struct.unpack_from("<f", data, offset + 0x4)[0]
+            v0 = struct.unpack_from("<f", data, offset + 0x8)[0]
+            u1 = struct.unpack_from("<f", data, offset + 0xc)[0]
+            v1 = struct.unpack_from("<f", data, offset + 0x10)[0]
 
-            # Valid UV rectangle check
-            if not (0.0 <= u0 < u1 <= 1.0 and 0.0 <= v0 < v1 <= 1.0):
-                continue
-
-            # Skip degenerate or full-texture frames
-            if u1 - u0 < 0.02 or v1 - v0 < 0.02:
-                continue
-            if u0 < 0.01 and v0 < 0.01 and u1 > 0.99 and v1 > 0.99:
-                continue
-
-            # Calculate pixel bounds
-            x = int(u0 * tex_width)
-            y = int(v0 * tex_height)
-            w = int((u1 - u0) * tex_width)
-            h = int((v1 - v0) * tex_height)
-
-            # Skip tiny or oversized frames
-            if w < 10 or h < 10:
-                continue
-            if w > tex_width * 0.9 or h > tex_height * 0.9:
-                continue
-
-            # Deduplicate by bounds (allow 2px tolerance)
-            key = (x // 2, y // 2, w // 2, h // 2)
-            if key in seen:
-                continue
-            seen.add(key)
-
-            frames.append(
-                TextureFrame(
-                    index=len(frames),
-                    x=x,
-                    y=y,
-                    width=w,
-                    height=h,
-                    u0=u0,
-                    v0=v0,
-                    u1=u1,
-                    v1=v1,
-                )
-            )
+            # Check for valid UV coordinates (non-degenerate, proper range)
+            # Note: 0.0 <= allows frames starting at atlas origin (0,0)
+            if (0.0 <= u0 < 1.0 and 0.0 <= v0 < 1.0 and
+                0.0 < u1 <= 1.0 and 0.0 < v1 <= 1.0 and
+                u1 > u0 and v1 > v0):
+                frame_start = offset
+                break
         except struct.error:
-            pass
+            continue
 
-    # Sort by position (top-left to bottom-right)
-    frames.sort(key=lambda f: (f.y, f.x))
-    for i, frame in enumerate(frames):
-        frame.index = i
+    if frame_start < 0:
+        return frames
+
+    # Parse frames from the found start position
+    frame_idx = 0
+    offset = frame_start
+
+    while offset + frame_size <= len(data):
+        try:
+            image_handle = struct.unpack_from("<I", data, offset)[0]
+            u0 = struct.unpack_from("<f", data, offset + 0x4)[0]
+            v0 = struct.unpack_from("<f", data, offset + 0x8)[0]
+            u1 = struct.unpack_from("<f", data, offset + 0xc)[0]
+            v1 = struct.unpack_from("<f", data, offset + 0x10)[0]
+
+            # Stop if we hit invalid UV data (end of frames)
+            if not (0.0 <= u0 <= 1.0 and 0.0 <= v0 <= 1.0 and
+                    0.0 <= u1 <= 1.0 and 0.0 <= v1 <= 1.0):
+                break
+
+            # Skip frames with degenerate dimensions
+            if u1 <= u0 or v1 <= v0:
+                offset += frame_size
+                continue
+
+            # Calculate pixel bounds (floor for top-left, ceil for bottom-right)
+            x = math.floor(u0 * tex_width)
+            y = math.floor(v0 * tex_height)
+            x1 = math.ceil(u1 * tex_width)
+            y1 = math.ceil(v1 * tex_height)
+            w = x1 - x
+            h = y1 - y
+
+            if w > 0 and h > 0:
+                frames.append(
+                    TextureFrame(
+                        index=frame_idx,
+                        x=x,
+                        y=y,
+                        width=w,
+                        height=h,
+                        u0=u0,
+                        v0=v0,
+                        u1=u1,
+                        v1=v1,
+                    )
+                )
+                frame_idx += 1
+
+            offset += frame_size
+        except struct.error:
+            break
 
     return frames
 
@@ -216,22 +249,39 @@ class TextureExtractor:
     High-level texture extraction from Diablo IV CASC storage.
 
     Memory optimized: Uses lazy loading and doesn't keep large data in memory.
+    Uses texconv as the primary decoder for BC-compressed textures when available.
     """
 
-    def __init__(self, game_dir: Path):
-        """Initialize the extractor with the game directory."""
+    def __init__(
+        self,
+        game_dir: Path,
+        texconv_config: Optional[TexconvConfig] = None,
+    ):
+        """
+        Initialize the extractor with the game directory.
+
+        Args:
+            game_dir: Path to Diablo IV installation directory
+            texconv_config: Optional texconv configuration for BC texture decoding
+        """
         self.game_dir = Path(game_dir)
         self.reader = D4CASCReader(game_dir)
+        self.texconv_config = texconv_config
+        self._texconv_wrapper: Optional[TexconvWrapper] = None
 
         # Only store lightweight references, not full data
         self._vfs2_ckey: Optional[str] = None
         self._tex_base_entry: Optional[VfsRootEntry] = None
         self._coretoc_entry: Optional[VfsRootEntry] = None
+        self._encrypted_snos_entry: Optional[VfsRootEntry] = None
+        self._shared_payloads_entry: Optional[VfsRootEntry] = None
 
         # Lightweight indexes (just offsets, not full data)
         self.texture_index: dict[int, tuple[int, int]] = {}  # sno_id -> (offset, size)
         self._payload_ekeys: dict[int, VfsRootEntry] = {}  # sno_id -> VfsRootEntry
         self._sno_names: dict[int, str] = {}  # sno_id -> name (only for textures)
+        self._encrypted_sno_ids: set[int] = set()  # Set of encrypted SNO IDs
+        self._shared_payload_redirects: dict[int, int] = {}  # source_sno -> target_sno
 
         self._init_indexes()
 
@@ -253,6 +303,8 @@ class TextureExtractor:
         # Extract just what we need
         self._tex_base_entry = vfs_files.get("Texture-Base-Global.dat")
         self._coretoc_entry = vfs_files.get("CoreTOC.dat")
+        self._encrypted_snos_entry = vfs_files.get("EncryptedSNOs.dat")
+        self._shared_payloads_entry = vfs_files.get("CoreTOCSharedPayloadsMapping.dat")
 
         if not self._tex_base_entry:
             raise ValueError("Texture-Base-Global.dat not found in VFS")
@@ -276,12 +328,29 @@ class TextureExtractor:
         # Load SNO names only for textures
         self._load_texture_names()
 
+        # Load encrypted SNO IDs
+        self._load_encrypted_snos()
+
+        # Load shared payload redirects
+        self._load_shared_payloads()
+
     def _build_texture_index(self) -> None:
-        """Build texture definition index from Texture-Base-Global.dat header."""
+        """
+        Build texture definition index from Texture-Base-Global.dat.
+
+        The offset calculation follows d4data's parseCombinedMetaFile() logic:
+        https://github.com/DiabloTools/d4data/blob/main/parse.js
+
+        Key insight: Texture entries (snoGroup 44) require special alignment:
+        1. Align file_data_offset to 8-byte boundary: ((offset + 7) // 8) * 8
+        2. Add 8 extra bytes for textures (snoGroup == 44 in parse.js line 1335-1337)
+
+        This differs from naive sequential offset calculation which produces
+        incorrect offsets and wrong metadata values (e.g., 512x512 instead of 768x576).
+        """
         if not self._tex_base_entry:
             return
 
-        # Read just the header of Texture-Base-Global.dat
         tex_base_data = self._read_vfs_entry(self._tex_base_entry)
         if not tex_base_data:
             return
@@ -292,16 +361,27 @@ class TextureExtractor:
 
         entry_count = struct.unpack("<I", tex_base_data[4:8])[0]
         index_offset = 8
-        def_offset = 8 + entry_count * 8
+
+        # d4data's alignment calculation for combined meta files:
+        # Start after the index table, then align each entry
+        alignment = 8
+        file_data_offset = 8 + entry_count * 8
 
         for i in range(entry_count):
             idx_pos = index_offset + i * 8
             sno_id = struct.unpack("<I", tex_base_data[idx_pos : idx_pos + 4])[0]
             def_size = struct.unpack("<I", tex_base_data[idx_pos + 4 : idx_pos + 8])[0]
-            self.texture_index[sno_id] = (def_offset, def_size)
-            def_offset += def_size
 
-        # We need to keep a reference to read definitions later
+            # Align to 8-byte boundary: ((offset + 8 - 1) / 8) * 8
+            # Then add 8 for textures (snoGroup == 44)
+            # Source: d4data parse.js lines 1328-1337
+            aligned_offset = ((file_data_offset + alignment - 1) // alignment) * alignment
+            actual_offset = aligned_offset + 8  # +8 for texture entries
+
+            self.texture_index[sno_id] = (actual_offset, def_size)
+            file_data_offset = actual_offset + def_size
+
+        # Keep reference to read definitions later
         self._tex_base_data = tex_base_data
 
     def _load_texture_names(self) -> None:
@@ -323,6 +403,82 @@ class TextureExtractor:
 
         del sno_dict
         del coretoc_data
+
+    def _load_encrypted_snos(self) -> None:
+        """Load the set of encrypted SNO IDs from EncryptedSNOs.dat."""
+        if not self._encrypted_snos_entry:
+            # File not found in VFS - this is OK, not all builds have it
+            return
+
+        encrypted_data = self._read_vfs_entry(self._encrypted_snos_entry)
+        if not encrypted_data:
+            return
+
+        # Parse the encrypted SNO list
+        self._encrypted_sno_ids = parse_encrypted_snos(encrypted_data)
+
+        del encrypted_data
+
+    def _load_shared_payloads(self) -> None:
+        """Load shared payload redirects from CoreTOCSharedPayloadsMapping.dat."""
+        if not self._shared_payloads_entry:
+            # File not found in VFS - this is OK, not all builds have it
+            return
+
+        shared_data = self._read_vfs_entry(self._shared_payloads_entry)
+        if not shared_data:
+            return
+
+        # Parse the shared payloads mapping
+        self._shared_payload_redirects = parse_shared_payloads_mapping(shared_data)
+
+        del shared_data
+
+    def get_payload_sno_id(self, sno_id: int) -> int:
+        """
+        Get the actual SNO ID to use for payload lookup.
+
+        Some textures share payloads with other textures. This method
+        follows the redirect chain to find the actual payload location.
+
+        Args:
+            sno_id: The original texture SNO ID
+
+        Returns:
+            The SNO ID where the payload is actually stored
+        """
+        # Follow redirect chain (with loop detection)
+        visited = set()
+        current = sno_id
+
+        while current in self._shared_payload_redirects:
+            if current in visited:
+                # Circular reference - shouldn't happen but be safe
+                break
+            visited.add(current)
+            current = self._shared_payload_redirects[current]
+
+        return current
+
+    def has_shared_payload(self, sno_id: int) -> bool:
+        """
+        Check if a texture uses a shared payload from another texture.
+
+        Args:
+            sno_id: The SNO ID to check
+
+        Returns:
+            True if the texture redirects to another texture's payload
+        """
+        return sno_id in self._shared_payload_redirects
+
+    @property
+    def shared_payload_count(self) -> int:
+        """Return the count of textures using shared payloads."""
+        # Count only redirects where the source is a texture
+        return len(
+            set(self._shared_payload_redirects.keys()) & set(self.texture_index.keys())
+        )
 
     def _read_vfs_entry(self, entry: VfsRootEntry) -> Optional[bytes]:
         """Read data for a VFS entry."""
@@ -353,6 +509,36 @@ class TextureExtractor:
         """Get the name of a texture by SNO ID."""
         return self._sno_names.get(sno_id)
 
+    def is_encrypted(self, sno_id: int) -> bool:
+        """
+        Check if a texture SNO is encrypted.
+
+        Args:
+            sno_id: The SNO ID to check
+
+        Returns:
+            True if the SNO is in the encrypted list
+        """
+        return sno_id in self._encrypted_sno_ids
+
+    @property
+    def encrypted_texture_count(self) -> int:
+        """Return the count of encrypted textures in the index."""
+        return len(self._encrypted_sno_ids & set(self.texture_index.keys()))
+
+    @property
+    def texconv_available(self) -> bool:
+        """Check if texconv is available for BC texture decoding."""
+        if self._texconv_wrapper is None:
+            self._texconv_wrapper = TexconvWrapper(self.texconv_config)
+        return self._texconv_wrapper.is_available()
+
+    def _get_texconv_wrapper(self) -> Optional[TexconvWrapper]:
+        """Get the texconv wrapper if available."""
+        if self._texconv_wrapper is None:
+            self._texconv_wrapper = TexconvWrapper(self.texconv_config)
+        return self._texconv_wrapper if self._texconv_wrapper.is_available() else None
+
     def list_textures(
         self, filter_pattern: Optional[str] = None
     ) -> list[tuple[int, str]]:
@@ -374,72 +560,11 @@ class TextureExtractor:
 
         return sorted(textures, key=lambda x: x[1])
 
-    def _find_best_payload_offset(
-        self,
-        payload: bytes,
-        mip0_size: int,
-        format_id: int,
-        width: int,
-        height: int,
-        max_search: int = 100000,
-        step: int = 1024,
-    ) -> int:
-        """
-        Find the best payload offset for high-ratio textures.
-
-        Some D4 textures store mipmaps with non-standard padding, causing
-        the mip0 data to not be at offset 0. This method scans offsets
-        to find the one that produces the most detailed/varied image.
-
-        Args:
-            payload: Raw payload bytes
-            mip0_size: Expected size of mip level 0
-            format_id: D4 texture format ID
-            width: Texture width in pixels
-            height: Texture height in pixels
-            max_search: Maximum offset to search
-            step: Step size between offset checks
-
-        Returns:
-            Best offset for mip0 data
-        """
-        if len(payload) <= mip0_size:
-            return 0
-
-        best_offset = 0
-        best_score = 0.0
-
-        max_offset = min(max_search, len(payload) - mip0_size)
-
-        for offset in range(0, max_offset + 1, step):
-            data = payload[offset : offset + mip0_size]
-            if len(data) < mip0_size:
-                break
-
-            try:
-                header = create_dds_header(width, height, format_id, len(data))
-                dds = header + data
-
-                img = Image.open(BytesIO(dds))
-                img.load()
-                arr = np.array(img.convert("RGBA"))
-
-                # Score by variance of non-transparent pixels
-                non_zero = arr[arr[:, :, 3] > 0]
-                if len(non_zero) > 0:
-                    variance = float(np.var(non_zero[:, :3]))
-                    if variance > best_score:
-                        best_score = variance
-                        best_offset = offset
-            except Exception:
-                pass
-
-        return best_offset
-
     def extract_texture(
         self,
         sno_id: int,
         crop: bool = True,
+        skip_encrypted: bool = True,
     ) -> Optional[Image.Image]:
         """
         Extract a texture as a PIL Image.
@@ -447,10 +572,26 @@ class TextureExtractor:
         Args:
             sno_id: The SNO ID of the texture
             crop: Whether to crop to actual texture dimensions
+            skip_encrypted: If True, return None for encrypted textures.
+                           If False, raise EncryptedSNOError.
 
         Returns:
             PIL Image or None if extraction fails
+
+        Raises:
+            EncryptedSNOError: If skip_encrypted is False and the texture is encrypted
         """
+        # Check if this SNO is encrypted
+        if self.is_encrypted(sno_id):
+            name = self.get_texture_name(sno_id) or f"sno_{sno_id}"
+            if skip_encrypted:
+                return None
+            else:
+                raise EncryptedSNOError(
+                    f"Texture '{name}' (SNO {sno_id}) is encrypted. "
+                    f"Cannot extract without decryption keys."
+                )
+
         # Get texture info
         tex_info = self.get_texture_info(sno_id)
         if not tex_info:
@@ -460,11 +601,14 @@ class TextureExtractor:
         if tex_info.format_id not in TEXTURE_FORMATS:
             return None
 
-        # Read payload
-        if sno_id not in self._payload_ekeys:
+        # Get the actual payload SNO ID (may redirect to shared payload)
+        payload_sno_id = self.get_payload_sno_id(sno_id)
+
+        # Read payload from the resolved SNO ID
+        if payload_sno_id not in self._payload_ekeys:
             return None
 
-        payload_data = self._read_vfs_entry(self._payload_ekeys[sno_id])
+        payload_data = self._read_vfs_entry(self._payload_ekeys[payload_sno_id])
         if not payload_data:
             return None
 
@@ -473,13 +617,18 @@ class TextureExtractor:
         if mip0_size <= 0:
             return None
 
-        # Check payload ratio - high ratio textures have non-standard row padding
-        payload_ratio = len(payload_data) / mip0_size
         is_bc1 = tex_info.format_id in (9, 10, 46, 47)
+
+        # Build DDS data
+        dds_header = create_dds_header(
+            tex_info.width, tex_info.height, tex_info.format_id, len(payload_data),
+        )
+        dds_data = dds_header + payload_data
 
         try:
             # Check for problematic BC1 textures with interleaved storage
-            # These have ~50% zero blocks and can't be decoded correctly
+            # These have ~50% zero blocks and can't be decoded correctly by Python decoders
+            is_interleaved_bc1 = False
             if is_bc1:
                 zero_blocks = sum(
                     1 for i in range(0, min(len(payload_data), 8000), 8)
@@ -489,25 +638,32 @@ class TextureExtractor:
                 zero_ratio = zero_blocks / total_blocks if total_blocks > 0 else 0
 
                 # If >30% zero blocks, this is D4's interleaved BC1 format
-                # which requires Windows texconv.exe to decode
                 if zero_ratio > 0.3:
+                    is_interleaved_bc1 = True
+
+                    # Try texconv first for interleaved BC1
+                    wrapper = self._get_texconv_wrapper()
+                    if wrapper:
+                        try:
+                            img = wrapper.convert_dds_to_image(dds_data)
+                            if img.mode != "RGBA":
+                                img = img.convert("RGBA")
+                            if crop and (img.width > tex_info.width or img.height > tex_info.height):
+                                img = img.crop((0, 0, tex_info.width, tex_info.height))
+                            return img
+                        except Exception:
+                            pass  # Fall through to raise error
+
+                    # No texconv available - raise error for caller
                     raise InterleavedBC1Error(
                         f"BC1 texture uses D4's interleaved format "
                         f"({zero_ratio:.0%} zero blocks). "
-                        f"Requires Windows texconv.exe to decode."
+                        f"Requires texconv.exe to decode. "
+                        f"Install from https://github.com/Microsoft/DirectXTex/releases"
                     )
 
-            # Standard texture: use DDS/PIL
-            if len(payload_data) > mip0_size:
-                texture_data = payload_data[:mip0_size]
-            else:
-                texture_data = payload_data
-
-            dds_header = create_dds_header(
-                tex_info.width, tex_info.height, tex_info.format_id, len(texture_data),
-            )
-            dds_data = dds_header + texture_data
-            img = dds_to_image(dds_data)
+            # Standard texture: use dds_to_image (texconv primary, Python fallback)
+            img = dds_to_image(dds_data, texconv_config=self.texconv_config)
 
             # Convert to RGBA
             if img.mode != "RGBA":
@@ -528,6 +684,7 @@ class TextureExtractor:
         sno_id: int,
         output_path: Path,
         crop: bool = True,
+        skip_encrypted: bool = True,
     ) -> bool:
         """
         Extract a texture and save to file.
@@ -536,11 +693,16 @@ class TextureExtractor:
             sno_id: The SNO ID of the texture
             output_path: Output file path
             crop: Whether to crop to actual texture dimensions
+            skip_encrypted: If True, return False for encrypted textures.
+                           If False, raise EncryptedSNOError.
 
         Returns:
             True if successful
+
+        Raises:
+            EncryptedSNOError: If skip_encrypted is False and the texture is encrypted
         """
-        img = self.extract_texture(sno_id, crop=crop)
+        img = self.extract_texture(sno_id, crop=crop, skip_encrypted=skip_encrypted)
         if not img:
             return False
 

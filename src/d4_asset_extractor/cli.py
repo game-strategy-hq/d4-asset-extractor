@@ -1,9 +1,10 @@
 """
 Diablo IV Asset Extractor CLI.
 
-Simple, opinionated extraction - reads directly from CASC, outputs to ./d4-data/
+Simple, opinionated extraction - reads directly from CASC, outputs to ./output/
 """
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -18,6 +19,7 @@ from rich.progress import (
 )
 
 from d4_asset_extractor import __version__
+from d4_asset_extractor.texconv import TexconvConfig
 
 app = typer.Typer(
     name="d4-extract",
@@ -28,7 +30,7 @@ app = typer.Typer(
 console = Console()
 
 # Default output structure
-OUTPUT_DIR = Path("./d4-data")
+OUTPUT_DIR = Path("./output")
 
 
 def version_callback(value: bool) -> None:
@@ -62,16 +64,23 @@ def extract(
         "-V",
         help="Show details.",
     ),
+    no_texconv: bool = typer.Option(
+        False,
+        "--no-texconv",
+        help="Disable texconv, use Python decoders only.",
+    ),
 ) -> None:
     """
     Extract textures from D4 game files.
 
-    Output: ./d4-data/textures/<name>.png
+    Output: ./output/textures/<name>.png
     """
-    from d4_asset_extractor.texture_extractor import TextureExtractor, InterleavedBC1Error
+    from d4_asset_extractor.texture_extractor import TextureExtractor
 
     output = OUTPUT_DIR / "textures"
     output.mkdir(parents=True, exist_ok=True)
+
+    texconv_config = TexconvConfig() if not no_texconv else None
 
     console.print("[bold blue]D4 Asset Extractor[/bold blue]")
     console.print(f"  Game: {game_dir}")
@@ -85,8 +94,15 @@ def extract(
             console=console,
         ) as progress:
             task = progress.add_task("Loading...", total=None)
-            extractor = TextureExtractor(game_dir)
+            extractor = TextureExtractor(game_dir, texconv_config=texconv_config)
             progress.update(task, completed=True, total=1)
+
+        console.print(f"  Version: {extractor.version}")
+        console.print(f"  Textures: {len(extractor.texture_index):,}")
+        if not no_texconv:
+            status = "[green]available[/green]" if extractor.texconv_available else "[yellow]not found[/yellow]"
+            console.print(f"  texconv: {status}")
+        console.print()
 
         # Write version info
         info_file = OUTPUT_DIR / "version.txt"
@@ -103,6 +119,11 @@ def extract(
 
         console.print(f"Extracting {len(textures):,} textures...")
 
+        # Track results
+        extracted = 0
+        skipped = 0
+        failures: dict[str, int] = {}  # reason -> count
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -111,10 +132,6 @@ def extract(
             console=console,
         ) as progress:
             task = progress.add_task("", total=len(textures))
-            extracted = 0
-            skipped = 0
-            failed = 0
-            bc1_interleaved = 0
 
             for sno_id, name in textures:
                 output_path = output / f"{name}.png"
@@ -130,28 +147,30 @@ def extract(
                         if verbose:
                             console.print(f"  [green]✓[/green] {name}")
                     else:
-                        failed += 1
+                        reason = "decode_failed"
+                        failures[reason] = failures.get(reason, 0) + 1
                         if verbose:
-                            console.print(f"  [dim]✗ {name}[/dim]")
-                except InterleavedBC1Error:
-                    bc1_interleaved += 1
-                    if verbose:
-                        console.print(f"  [yellow]⚠[/yellow] {name} [dim](BC1 interleaved)[/dim]")
+                            console.print(f"  [red]✗[/red] {name}")
                 except Exception as e:
-                    failed += 1
+                    # Categorize the failure
+                    err_name = type(e).__name__
+                    reason = err_name.replace("Error", "").lower()
+                    failures[reason] = failures.get(reason, 0) + 1
                     if verbose:
-                        console.print(f"  [red]✗[/red] {name}: {e}")
+                        console.print(f"  [yellow]✗[/yellow] {name} ({reason})")
 
                 progress.advance(task)
 
+        # Summary
         console.print()
         console.print(f"[green]Extracted:[/green] {extracted}")
         if skipped:
             console.print(f"[dim]Skipped (existing):[/dim] {skipped}")
-        if bc1_interleaved:
-            console.print(f"[yellow]BC1 interleaved (needs texconv):[/yellow] {bc1_interleaved}")
-        if failed:
-            console.print(f"[red]Failed:[/red] {failed}")
+        if failures:
+            total_failed = sum(failures.values())
+            console.print(f"[yellow]Failed:[/yellow] {total_failed}")
+            for reason, count in sorted(failures.items(), key=lambda x: -x[1]):
+                console.print(f"  [dim]{reason}:[/dim] {count}")
         console.print()
         console.print(f"[blue]Output:[/blue] {output.absolute()}")
 
@@ -279,17 +298,23 @@ def icons(
         "-V",
         help="Show details.",
     ),
+    no_texconv: bool = typer.Option(
+        False,
+        "--no-texconv",
+        help="Disable texconv, use Python decoders only.",
+    ),
 ) -> None:
     """
     Extract individual icons from texture atlases.
 
-    Automatically slices sprite sheets into individual icon files.
-    Output: ./d4-data/icons/<atlas_name>/<index>_WxH.png
+    Output: ./output/icons/<atlas_name>/<index>_WxH.png
     """
     from d4_asset_extractor.texture_extractor import TextureExtractor
 
     output = OUTPUT_DIR / "icons"
     output.mkdir(parents=True, exist_ok=True)
+
+    texconv_config = TexconvConfig() if not no_texconv else None
 
     console.print("[bold blue]D4 Icon Extractor[/bold blue]")
     console.print(f"  Game: {game_dir}")
@@ -304,8 +329,16 @@ def icons(
             console=console,
         ) as progress:
             task = progress.add_task("Loading...", total=None)
-            extractor = TextureExtractor(game_dir)
+            extractor = TextureExtractor(game_dir, texconv_config=texconv_config)
             progress.update(task, completed=True, total=1)
+
+        # Show texconv status
+        if not no_texconv:
+            if extractor.texconv_available:
+                console.print("[green]texconv:[/green] available")
+            else:
+                console.print("[yellow]texconv:[/yellow] not found (using Python decoders)")
+        console.print()
 
         textures = extractor.list_textures(filter_pattern)
 
